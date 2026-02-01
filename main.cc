@@ -143,10 +143,12 @@ public:
     char        data[];
   };
 
-  static constexpr size_t header_size = sizeof(header_type);
+  static constexpr size_t header_size     = sizeof(header_type);
+  static constexpr size_t cache_line_size = std::hardware_destructive_interference_size;
 
   void                initialize(void* addr, size_t size);
 
+  // There will always be at least one cache line free, however this cannot be used.
   uint32_t            available_write();
 
   bool                write(uint32_t id, uint32_t size, void* data);
@@ -210,16 +212,23 @@ ChannelMetadata::write(uint32_t id, uint32_t size, void* data) {
   size_t start_offset = m_read_offset.load(std::memory_order_acquire);
   size_t end_offset   = m_write_offset.load(std::memory_order_acquire);
 
+  // We keep a cache line free to distinguish full/empty.
+
   if (end_offset < start_offset) {
     // We're in wrapped state.
-    if (start_offset - end_offset < total_size)
+    if (start_offset - end_offset < total_size + cache_line_size)
       return false;
+
+  } else if (end_offset == m_size) {
+    // At end, need to wrap.
+    if (start_offset < total_size + cache_line_size)
+      return false;
+
+    end_offset = 0;
 
   } else if (m_size - end_offset < total_size) {
     // Not enough space at end, need to wrap.
-
-    // Check if we have enough space at start.
-    if (start_offset < total_size)
+    if (start_offset < total_size + cache_line_size)
       return false;
 
     auto padding_header = reinterpret_cast<header_type*>(static_cast<char*>(m_addr) + end_offset);
@@ -317,7 +326,7 @@ child_process(shm::SharedSegment* segment) {
       std::cout << "Child process: no message available, waiting..." << std::endl;
       // sleep(1);
       // sleep shorter
-      usleep(10000); // 100 ms
+      usleep(100); // 100 ms
       continue;
     }
 
@@ -325,7 +334,7 @@ child_process(shm::SharedSegment* segment) {
 
     metadata->consume_header(header);
 
-    sleep(1);
+    // sleep(1);
   }
 }
 
@@ -343,11 +352,11 @@ parent_process(shm::SharedSegment* segment) {
     while (!metadata->write(1, strlen(message) + 1, (void*)message)) {
       std::cout << "Parent process: channel full, waiting..." << std::endl;
       // sleep(2);
-      usleep(10000); // 100 ms
+      usleep(10000); // 10 s
     }
 
     // sleep(5);
-    usleep(50000); // 500 ms
+    usleep(500); // 500 ms
   }
 }
 
@@ -355,7 +364,8 @@ int
 main() {
   auto segment = std::make_unique<shm::SharedSegment>();
 
-  segment->create(12 * shm::SharedSegment::page_size);
+  // segment->create(12 * shm::SharedSegment::page_size);
+  segment->create(1 * shm::SharedSegment::page_size);
   segment->attach();
 
   auto metadata = static_cast<shm::ChannelMetadata*>(segment->address());
