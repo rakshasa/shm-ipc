@@ -2,7 +2,10 @@
 
 #include "torrent/shm/router.h"
 
+#include <cassert>
+
 #include "torrent/exceptions.h"
+#include "torrent/shm/channel.h"
 
 namespace torrent::shm {
 
@@ -14,26 +17,40 @@ Router::Router(Channel* read_channel, Channel* write_channel)
 Router::~Router() = default;
 
 uint32_t
-Router::register_handler(std::function<void(void* data, uint32_t size)> on_read,
-                         std::function<void(void* data, uint32_t size)> on_error) {
-  if (!on_read)
-    throw torrent::internal_error("Router::register_handler(): on_read handler is required");
-  if (!on_error)
-    throw torrent::internal_error("Router::register_handler(): on_error handler is required");
+Router::register_handler(data_func on_read, data_func on_error) {
+  auto id = m_next_id;
 
-  auto id  = m_next_id;
-  auto itr, inserted = m_handlers.try_emplace(id, RouterHandler{on_read, on_error});
+  while (!try_register_handler(id, on_read, on_error)) {
+    id++;
 
-  // TODO: Try to find a free id instead of throwing.
-  if (itr != m_handlers.end())
+    if (id == 0)
+      throw torrent::internal_error("Router::register_handler(): no available ids");
+  }
+
+  m_next_id = id + 1;
+  return id;
+}
+
+void
+Router::register_handler(int id, data_func on_read, data_func on_error) {
+  if (!try_register_handler(id, on_read, on_error))
     throw torrent::internal_error("Router::register_handler(): id already in use");
+}
+
+bool
+Router::try_register_handler(int id, data_func on_read, data_func on_error) {
+  auto [itr, inserted] = m_handlers.try_emplace(id, RouterHandler{on_read, on_error});
+
+  if (!inserted)
+    return false;
+
+  if (!on_read)
+    throw torrent::internal_error("Router::try_register_handler(): on_read handler is required");
+  if (!on_error)
+    throw torrent::internal_error("Router::try_register_handler(): on_error handler is required");
 
   m_handlers[id] = RouterHandler{on_read, on_error};
-
-  // TODO: Handle wrap-around.
-  m_next_id++;
-
-  return id;
+  return true;
 }
 
 void
@@ -56,9 +73,9 @@ Router::close(uint32_t id) {
 
   itr->second.on_error = nullptr;
 
-  if (!m_write_channel->write(id | Channel::flag_close, 0, nullptr)) {
+  if (!m_write_channel->write(id | Router::flag_close, 0, nullptr)) {
     // TODO: Add to a pending close queue to retry later?
-    throw torrent::internal_error("Router::unregister_handler(): failed to write close event to channel");
+    throw torrent::internal_error("Router::close(): failed to write close event to channel");
   }
 }
 
@@ -67,7 +84,7 @@ Router::write(uint32_t id, uint32_t size, void* data) {
   assert(m_handlers.find(id) != m_handlers.end());
 
   if (size == 0)
-    return;
+    return true;
 
   return m_write_channel->write(id, size, data);
 }
@@ -84,7 +101,7 @@ Router::process_reads() {
 
     // TODO: Add a special handler for id=0?
 
-    auto itr = m_handlers.find(header->id & ~Channel::flag_mask);
+    auto itr = m_handlers.find(header->id & ~Router::flag_mask);
 
     if (itr == m_handlers.end()) {
       // This really shouldn't happen.
@@ -94,11 +111,18 @@ Router::process_reads() {
       // continue;
     }
 
-    if (header->id & Channel::flag_close) {
-      if (itr->second.is_closed_read())
+    if (header->id & Router::flag_close) {
+      if (itr->second.is_closed_read()) {
         m_handlers.erase(itr);
-      else
-        itr->second.on_read = nullptr;
+
+        m_read_channel->consume_header(header);
+        continue;
+      }
+
+      if (header->size != 0)
+        throw torrent::internal_error("Router::process_reads(): close message with non-zero size");
+
+      itr->second.on_read = nullptr;
 
       m_read_channel->consume_header(header);
       continue;
@@ -109,6 +133,14 @@ Router::process_reads() {
 
     m_read_channel->consume_header(header);
   }
+
+  // TODO: Replace zero-length close messages with a id=0 special message that is buffered and
+  // packed.
+  //
+  // By adding a (free space) buffer for special messages we avoid writes of closes failing.
+  //
+  // The process_reads() function can then send these special messages after reading normal
+  // messages, and do reads while the buffer is insufficient to send them.
 }
 
 } // namespace torrent::shm

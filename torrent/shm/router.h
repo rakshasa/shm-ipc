@@ -15,6 +15,8 @@
 // We store id's with std::function handlers, and for now just use a simple container for that.
 //
 // We may later want to optimize this with a more efficient container. So add member functions for access.
+//
+// Router should have one channel producer, and one consumer, to avoid id conflicts.
 
 namespace torrent::shm {
 
@@ -38,15 +40,18 @@ struct RouterHandler {
 
 class LIBTORRENT_EXPORT Router {
 public:
+  using data_func = std::function<void(void* data, uint32_t size)>;
+
   constexpr static uint32_t flag_close = 0x80000000;
   constexpr static uint32_t flag_mask  = 0xF0000000;
 
   Router(Channel* read_channel, Channel* write_channel);
   ~Router();
 
-  // Sends size 0 to indicate close.
-  uint32_t            register_handler(std::function<void(void* data, uint32_t size)> on_read,
-                                       std::function<void(void* data, uint32_t size)> on_error);
+  // TODO: Replace uint32_t with struct with member functions.
+  uint32_t            register_handler(data_func on_read, data_func on_error);
+  void                register_handler(int id, data_func on_read, data_func on_error);
+  bool                try_register_handler(int id, data_func on_read, data_func on_error);
 
   void                close(uint32_t id);
   bool                write(uint32_t id, uint32_t size, void* data);

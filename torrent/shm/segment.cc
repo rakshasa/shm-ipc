@@ -43,9 +43,11 @@ Segment::close() {
   m_addr   = nullptr;
 }
 
-// TODO: Change to return a ChannelMetadata*.
 void
 Segment::attach() {
+  if (m_addr != nullptr)
+    throw torrent::internal_error("Segment::attach() segment already attached");
+
   void* addr = shmat(m_shm_id, nullptr, 0);
 
   if (addr == (void*)-1)
