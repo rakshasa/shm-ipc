@@ -9,9 +9,10 @@
 
 namespace torrent::shm {
 
-Router::Router(Channel* read_channel, Channel* write_channel)
+Router::Router(int fd, Channel* read_channel, Channel* write_channel)
   : m_read_channel(read_channel),
-    m_write_channel(write_channel) {
+    m_write_channel(write_channel),
+    m_fd(fd) {
 }
 
 Router::~Router() = default;

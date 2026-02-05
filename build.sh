@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 source_files=(
   main.cc
   exceptions.cc
@@ -8,6 +10,6 @@ source_files=(
   torrent/shm/segment.cc
 )
 
-clang++ -std=c++17 -I${pwd .} -I/opt/local/include -I/opt/local/include  -pthread -g -O2 -DDEBUG -Wall -o test "${source_files[@]}"
+clang++ -std=c++17 -I. -I/opt/local/include -I/opt/local/include  -pthread -g -O2 -DDEBUG -Wall -o test "${source_files[@]}"
 
 chmod +x test

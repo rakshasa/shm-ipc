@@ -45,8 +45,10 @@ public:
   constexpr static uint32_t flag_close = 0x80000000;
   constexpr static uint32_t flag_mask  = 0xF0000000;
 
-  Router(Channel* read_channel, Channel* write_channel);
+  Router(int fd, Channel* read_channel, Channel* write_channel);
   ~Router();
+
+  int                 file_descriptor() const;
 
   // TODO: Replace uint32_t with struct with member functions.
   uint32_t            register_handler(data_func on_read, data_func on_error);
@@ -58,15 +60,20 @@ public:
 
   void                process_reads();
 
-protected:
+private:
   using handler_map = std::map<uint32_t, RouterHandler>;
 
   Channel*            m_read_channel{};
   Channel*            m_write_channel{};
 
+  int                 m_fd;
+
   uint32_t            m_next_id{1};
   handler_map         m_handlers;
 };
+
+inline int Router::file_descriptor() const { return m_fd; }
+
 
 } // namespace torrent::shm
 
