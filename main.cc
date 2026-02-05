@@ -8,6 +8,24 @@
 #include "torrent/shm/channel.h"
 #include "torrent/shm/router.h"
 
+// handle segfault and other signals by closing fd
+int g_fd_to_close_on_signal = -1;
+
+void
+do_panic(int signum) {
+  if (g_fd_to_close_on_signal != -1) {
+    close(g_fd_to_close_on_signal);
+    g_fd_to_close_on_signal = -1;
+  }
+
+  std::cerr << "Process terminating due to signal: " << signum << std::endl;
+
+  signal(signum, SIG_DFL);
+  signal(SIGABRT, SIG_DFL);
+
+  abort();
+}
+
 struct NewChannelMessage {
   uint32_t id;
 };
@@ -103,7 +121,7 @@ ChildHandler::on_read(void* data, uint32_t size) {
 
   channels.push_back(handler);
 
-  router->register_handler(
+  router->register_handler(handler->id,
     [&](void* data, uint32_t size) { handler->on_read(data, size); },
     [&](void* data, uint32_t size) { handler->on_error(data, size); }
   );
@@ -111,8 +129,12 @@ ChildHandler::on_read(void* data, uint32_t size) {
 
 bool
 check_socket_closed(int fd) {
+  errno = 0;
+
   char buffer[1];
   ssize_t result = recv(fd, buffer, sizeof(buffer), MSG_PEEK | MSG_DONTWAIT);
+
+  std::cout << "check_socket_closed(): recv() returned " << result << ", errno=" << std::strerror(errno) << std::endl;
 
   if (result == 0)
     return true;
@@ -120,8 +142,8 @@ check_socket_closed(int fd) {
   if (result > 0)
     throw std::runtime_error("check_socket_closed(): recv() returned unexpected data");
 
-  if (errno == EAGAIN || errno == EWOULDBLOCK)
-    return false;
+  if (errno != EAGAIN && errno != EWOULDBLOCK)
+    return true;
 
   return false;
 }
@@ -135,6 +157,12 @@ child_process(int fd, torrent::shm::Segment* read_segment, torrent::shm::Segment
   auto router        = std::make_unique<torrent::shm::Router>(fd, read_channel, write_channel);
 
   ChildHandler child_handler;
+  child_handler.id = 1;
+
+  router->register_handler(1,
+    [&](void* data, uint32_t size) { child_handler.on_read(data, size); },
+    [&](void* data, uint32_t size) { child_handler.on_error(data, size); }
+  );
 
   for (int i = 0; ; ++i) {
     if (check_socket_closed(router->file_descriptor())) {
@@ -219,6 +247,15 @@ parent_process(int fd, torrent::shm::Segment* read_segment, torrent::shm::Segmen
 
 int
 main() {
+  // add signal handlers:
+  signal(SIGSEGV, do_panic);
+  signal(SIGABRT, do_panic);
+  signal(SIGFPE, do_panic);
+  signal(SIGILL, do_panic);
+  signal(SIGTERM, do_panic);
+  signal(SIGINT, do_panic);
+  signal(SIGPIPE, SIG_IGN); // ignore SIGPIPE
+
   auto segment_1 = std::make_unique<torrent::shm::Segment>();
   auto segment_2 = std::make_unique<torrent::shm::Segment>();
 
@@ -254,14 +291,33 @@ main() {
     throw std::runtime_error("fork() failed: " + std::string(strerror(errno)));
 
   if (pid == 0) {
+    sleep(5);
+
+    g_fd_to_close_on_signal = socket_pair[1];
     close(socket_pair[0]);
-    child_process(socket_pair[1], segment_2.get(), segment_1.get());
+
+    try {
+      child_process(socket_pair[1], segment_2.get(), segment_1.get());
+    } catch (const std::exception& e) {
+      std::cerr << "Child process exception: " << e.what() << std::endl;
+    }
+
+    std::cout << "Child process exiting..." << std::endl;
+    return 0;
+
   } else {
+    g_fd_to_close_on_signal = socket_pair[0];
     close(socket_pair[1]);
-    parent_process(socket_pair[0], segment_1.get(), segment_2.get());
+
+    try {
+      parent_process(socket_pair[0], segment_1.get(), segment_2.get());
+    } catch (const std::exception& e) {
+      std::cerr << "Parent process exception: " << e.what() << std::endl;
+    }
+
+    std::cout << "Parent process exiting..." << std::endl;
+
+    ::wait(nullptr);
+    return 0;
   }
-
-  ::wait(nullptr);
-
-  return 0;
 }
