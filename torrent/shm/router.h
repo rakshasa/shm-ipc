@@ -56,9 +56,14 @@ public:
   bool                try_register_handler(int id, data_func on_read, data_func on_error);
 
   void                close(uint32_t id);
+
+  // TODO: Add direct write to shm channel from at-write generated data.
+
   bool                write(uint32_t id, uint32_t size, void* data);
 
   void                process_reads();
+
+  void                send_fatal_error(const char* msg, uint32_t size);
 
 private:
   using handler_map = std::map<uint32_t, RouterHandler>;
@@ -66,6 +71,7 @@ private:
   Channel*            m_read_channel{};
   Channel*            m_write_channel{};
 
+  // TODO: Make sighandler send stack dump on crash?
   int                 m_fd;
 
   uint32_t            m_next_id{1};
@@ -73,7 +79,6 @@ private:
 };
 
 inline int Router::file_descriptor() const { return m_fd; }
-
 
 } // namespace torrent::shm
 

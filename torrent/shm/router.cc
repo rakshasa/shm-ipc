@@ -3,6 +3,8 @@
 #include "torrent/shm/router.h"
 
 #include <cassert>
+#include <unistd.h>
+#include <sys/socket.h>
 
 #include "torrent/exceptions.h"
 #include "torrent/shm/channel.h"
@@ -40,9 +42,10 @@ Router::register_handler(int id, data_func on_read, data_func on_error) {
 
 bool
 Router::try_register_handler(int id, data_func on_read, data_func on_error) {
-  auto [itr, inserted] = m_handlers.try_emplace(id, RouterHandler{on_read, on_error});
+  // TODO: Optimize to avoid double lookup.
+  auto itr = m_handlers.find(id);
 
-  if (!inserted)
+  if (itr != m_handlers.end())
     return false;
 
   if (!on_read)
@@ -112,6 +115,9 @@ Router::process_reads() {
       // continue;
     }
 
+    if (header->size != 0 && !itr->second.is_closed_read())
+      itr->second.on_read(header->data, header->size);
+
     if (header->id & Router::flag_close) {
       if (itr->second.is_closed_read()) {
         m_handlers.erase(itr);
@@ -129,9 +135,6 @@ Router::process_reads() {
       continue;
     }
 
-    if (!itr->second.is_closed_read())
-      itr->second.on_read(header->data, header->size);
-
     m_read_channel->consume_header(header);
   }
 
@@ -142,6 +145,18 @@ Router::process_reads() {
   //
   // The process_reads() function can then send these special messages after reading normal
   // messages, and do reads while the buffer is insufficient to send them.
+}
+
+void
+Router::send_fatal_error(const char* msg, uint32_t size) {
+  if (m_fd == -1)
+    throw torrent::internal_error("Router::send_fatal_error(): no file descriptor to send error message on");
+
+  if (::send(m_fd, msg, size, 0) == -1)
+    throw torrent::internal_error("Router::send_fatal_error(): failed to send error message");
+
+  ::close(m_fd);
+  m_fd = -1;
 }
 
 } // namespace torrent::shm
