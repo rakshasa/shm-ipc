@@ -47,20 +47,14 @@ std::unique_ptr<Router>
 RouterFactory::create_parent_router() {
   ::close(m_socket_2);
 
-  auto channel_1 = static_cast<torrent::shm::Channel*>(m_segment_1->address());
-  auto channel_2 = static_cast<torrent::shm::Channel*>(m_segment_2->address());
-
-  return std::make_unique<Router>(m_socket_1, channel_1, channel_2);
+  return std::make_unique<Router>(m_socket_1, std::move(m_segment_1), std::move(m_segment_2));
 }
 
 std::unique_ptr<Router>
 RouterFactory::create_child_router() {
   ::close(m_socket_1);
 
-  auto channel_1 = static_cast<torrent::shm::Channel*>(m_segment_1->address());
-  auto channel_2 = static_cast<torrent::shm::Channel*>(m_segment_2->address());
-
-  return std::make_unique<Router>(m_socket_2, channel_2, channel_1);
+  return std::make_unique<Router>(m_socket_2, std::move(m_segment_2), std::move(m_segment_1));
 }
 
 } // namespace torrent::shm

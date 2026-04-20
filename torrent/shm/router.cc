@@ -8,13 +8,17 @@
 
 #include "torrent/exceptions.h"
 #include "torrent/shm/channel.h"
+#include "torrent/shm/segment.h"
 
 namespace torrent::shm {
 
-Router::Router(int fd, Channel* read_channel, Channel* write_channel)
-  : m_read_channel(read_channel),
-    m_write_channel(write_channel),
+Router::Router(int fd, std::unique_ptr<Segment> read_segment, std::unique_ptr<Segment> write_segment)
+  : m_read_segment(std::move(read_segment)),
+    m_write_segment(std::move(write_segment)),
     m_fd(fd) {
+
+  m_read_channel  = static_cast<Channel*>(m_read_segment->address());
+  m_write_channel = static_cast<Channel*>(m_write_segment->address());
 }
 
 Router::~Router() = default;
