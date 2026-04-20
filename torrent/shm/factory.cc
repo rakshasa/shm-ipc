@@ -21,11 +21,8 @@ RouterFactory::initialize(uint32_t segment_size) {
   m_segment_1->create(segment_size);
   m_segment_2->create(segment_size);
 
-  m_channel_1 = std::make_unique<Channel>();
-  m_channel_2 = std::make_unique<Channel>();
-
-  m_channel_1->initialize(m_segment_1->address(), m_segment_1->size());
-  m_channel_2->initialize(m_segment_2->address(), m_segment_2->size());
+  static_cast<torrent::shm::Channel*>(m_segment_1->address())->initialize(m_segment_1->address(), m_segment_1->size());
+  static_cast<torrent::shm::Channel*>(m_segment_2->address())->initialize(m_segment_2->address(), m_segment_2->size());
 
   // TODO: Use fd_*()
 
@@ -50,14 +47,20 @@ std::unique_ptr<Router>
 RouterFactory::create_parent_router() {
   ::close(m_socket_2);
 
-  return std::make_unique<Router>(m_socket_1, m_channel_1.get(), m_channel_2.get());
+  auto channel_1 = static_cast<torrent::shm::Channel*>(m_segment_1->address());
+  auto channel_2 = static_cast<torrent::shm::Channel*>(m_segment_2->address());
+
+  return std::make_unique<Router>(m_socket_1, channel_1, channel_2);
 }
 
 std::unique_ptr<Router>
 RouterFactory::create_child_router() {
   ::close(m_socket_1);
 
-  return std::make_unique<Router>(m_socket_2, m_channel_2.get(), m_channel_1.get());
+  auto channel_1 = static_cast<torrent::shm::Channel*>(m_segment_1->address());
+  auto channel_2 = static_cast<torrent::shm::Channel*>(m_segment_2->address());
+
+  return std::make_unique<Router>(m_socket_2, channel_2, channel_1);
 }
 
 } // namespace torrent::shm

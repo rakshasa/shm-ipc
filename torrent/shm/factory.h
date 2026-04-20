@@ -26,12 +26,9 @@ private:
   int                      m_socket_1{};
   int                      m_socket_2{};
 
-  // TODO: Channel should own these.
+  // TODO: Copy move these to router.
   std::unique_ptr<Segment> m_segment_1;
   std::unique_ptr<Segment> m_segment_2;
-
-  std::unique_ptr<Channel> m_channel_1;
-  std::unique_ptr<Channel> m_channel_2;
 };
 
 } // namespace torrent::shm
