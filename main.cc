@@ -7,6 +7,7 @@
 
 #include "torrent/shm/segment.h"
 #include "torrent/shm/channel.h"
+#include "torrent/shm/factory.h"
 #include "torrent/shm/router.h"
 
 // handle segfault and other signals by closing fd
@@ -175,24 +176,20 @@ check_socket_closed(int fd) {
 }
 
 void
-child_process(int fd, torrent::shm::Segment* read_segment, torrent::shm::Segment* write_segment) {
+child_process(torrent::shm::Router* router) {
   std::cout << "Child process started, reading messages..." << std::endl;
 
-  auto read_channel  = static_cast<torrent::shm::Channel*>(read_segment->address());
-  auto write_channel = static_cast<torrent::shm::Channel*>(write_segment->address());
-  auto router        = std::make_unique<torrent::shm::Router>(fd, read_channel, write_channel);
-
-  g_router = router.get();
+  g_router = router;
 
   auto child_handler = new ChildHandler{};
   child_handler->id = 1;
-  child_handler->router = router.get();
+  child_handler->router = router;
 
   router->register_handler(1,
                            [child_handler](void* data, uint32_t size) { child_handler->on_read(data, size); },
                            [child_handler](void* data, uint32_t size) { child_handler->on_error(data, size); });
 
-  for (int i = 0; ; ++i) {
+  for (int i = 0; i < 20; ++i) {
     if (check_socket_closed(router->file_descriptor())) {
       std::cout << "Child process: socket closed, exiting..." << std::endl;
       break;
@@ -213,7 +210,7 @@ child_process(int fd, torrent::shm::Segment* read_segment, torrent::shm::Segment
 
       uint32_t id = child_handler->channels[i % child_handler->channels.size()]->id;
 
-      while (!write_channel->write(id, strlen(message) + 1, (void*)message)) {
+      while (!router->write(id, strlen(message) + 1, (void*)message)) {
         std::cout << "Child process: channel full, waiting..." << std::endl;
         usleep(1000); // 100 ms
       }
@@ -224,12 +221,8 @@ child_process(int fd, torrent::shm::Segment* read_segment, torrent::shm::Segment
 }
 
 void
-parent_process(int fd, torrent::shm::Segment* read_segment, torrent::shm::Segment* write_segment) {
+parent_process(torrent::shm::Router* router) {
   std::cout << "Parent process started, writing messages..." << std::endl;
-
-  auto read_channel  = static_cast<torrent::shm::Channel*>(read_segment->address());
-  auto write_channel = static_cast<torrent::shm::Channel*>(write_segment->address());
-  auto router        = std::make_unique<torrent::shm::Router>(fd, read_channel, write_channel);
 
   auto parent_handler = new ParentHandler{};
   parent_handler->id = 1;
@@ -238,8 +231,8 @@ parent_process(int fd, torrent::shm::Segment* read_segment, torrent::shm::Segmen
                            [parent_handler](void* data, uint32_t size) { parent_handler->on_read(data, size); },
                            [parent_handler](void* data, uint32_t size) { parent_handler->on_error(data, size); });
 
-  auto handler_1 = parent_handler->create_new_channel(router.get());
-  auto handler_2 = parent_handler->create_new_channel(router.get());
+  auto handler_1 = parent_handler->create_new_channel(router);
+  auto handler_2 = parent_handler->create_new_channel(router);
 
   for (int i = 0; ; ++i) {
     if (check_socket_closed(router->file_descriptor())) {
@@ -255,7 +248,7 @@ parent_process(int fd, torrent::shm::Segment* read_segment, torrent::shm::Segmen
 
     uint32_t id = (i % 2 == 0) ? handler_1->id : handler_2->id;
 
-    while (!write_channel->write(id, strlen(message) + 1, (void*)message)) {
+    while (!router->write(id, strlen(message) + 1, (void*)message)) {
       std::cout << "Parent process: channel full, waiting..." << std::endl;
       usleep(1000); // 100 ms
     }
@@ -263,14 +256,6 @@ parent_process(int fd, torrent::shm::Segment* read_segment, torrent::shm::Segmen
     sleep(1);
   }
 }
-
-// TODO: Detect when the other process has exited and exit cleanly
-//
-// Can we use socketpair where one side closes?
-//
-// Anser: No, socketpair doesn't work with fork() because the file descriptors are shared and closing them in one process would affect the other process. We need to use shared memory and synchronization primitives to detect when the other process has exited.
-//
-// The above seems wrong, if we use socketpair and fork, the child process will inherit the file descriptors and can use them to communicate with the parent process. When one process closes its end of the socket, the other process can detect this and exit cleanly.
 
 int
 main() {
@@ -283,34 +268,9 @@ main() {
   signal(SIGINT, do_panic);
   signal(SIGPIPE, SIG_IGN); // ignore SIGPIPE
 
-  auto segment_1 = std::make_unique<torrent::shm::Segment>();
-  auto segment_2 = std::make_unique<torrent::shm::Segment>();
+  torrent::shm::RouterFactory factory;
 
-  // segment->create(12 * torrent::shm::Segment::page_size);
-  segment_1->create(1 * torrent::shm::Segment::page_size);
-  segment_2->create(1 * torrent::shm::Segment::page_size);
-
-  // segment_1->attach();
-  // segment_2->attach();
-
-  static_cast<torrent::shm::Channel*>(segment_1->address())->initialize(segment_1->address(), segment_1->size());
-  static_cast<torrent::shm::Channel*>(segment_2->address())->initialize(segment_2->address(), segment_2->size());
-
-  // SEGFAULT when detaching before fork()
-  // TODO: When forking multiple processes, pass a list of segments to detach that aren't relevant.
-  // segment_1->detach();
-  // segment_2->detach();
-
-  // Create socketpair for communication between parent and child process. Set nonblock
-  int socket_pair[2];
-
-  if (socketpair(AF_LOCAL, SOCK_STREAM, 0, socket_pair) == -1)
-    throw std::runtime_error("socketpair() failed: " + std::string(strerror(errno)));
-
-  if (fcntl(socket_pair[0], F_SETFL, O_NONBLOCK) == -1)
-    throw std::runtime_error("fcntl() failed: " + std::string(strerror(errno)));
-  if (fcntl(socket_pair[1], F_SETFL, O_NONBLOCK) == -1)
-    throw std::runtime_error("fcntl() failed: " + std::string(strerror(errno)));
+  factory.initialize(1 * torrent::shm::Segment::page_size);
 
   pid_t pid = ::fork();
 
@@ -320,11 +280,12 @@ main() {
   if (pid == 0) {
     // sleep(15);
 
-    g_fd_to_close_on_signal = socket_pair[1];
-    close(socket_pair[0]);
+    auto router = factory.create_child_router();
+
+    g_fd_to_close_on_signal = router->file_descriptor();
 
     try {
-      child_process(socket_pair[1], segment_2.get(), segment_1.get());
+      child_process(router.get());
     } catch (const std::exception& e) {
       std::cerr << "Child process exception: " << e.what() << std::endl;
     }
@@ -333,11 +294,12 @@ main() {
     return 0;
 
   } else {
-    g_fd_to_close_on_signal = socket_pair[0];
-    close(socket_pair[1]);
+    auto router = factory.create_parent_router();
+
+    g_fd_to_close_on_signal = router->file_descriptor();
 
     try {
-      parent_process(socket_pair[0], segment_1.get(), segment_2.get());
+      parent_process(router.get());
     } catch (const std::exception& e) {
       std::cerr << "Parent process exception: " << e.what() << std::endl;
     }

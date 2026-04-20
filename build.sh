@@ -1,11 +1,12 @@
 #!/bin/bash
 
-set -e
+set -eux
 
 source_files=(
   main.cc
   exceptions.cc
   torrent/shm/channel.cc
+  torrent/shm/factory.cc
   torrent/shm/router.cc
   torrent/shm/segment.cc
 )

@@ -118,6 +118,8 @@ Router::process_reads() {
     if (header->size != 0 && !itr->second.is_closed_read())
       itr->second.on_read(header->data, header->size);
 
+    // TODO: Error on size == 0 and not close?
+
     if (header->id & Router::flag_close) {
       if (itr->second.is_closed_read()) {
         m_handlers.erase(itr);
