@@ -87,8 +87,8 @@ bool
 Router::write(uint32_t id, uint32_t size, void* data) {
   assert(m_handlers.find(id) != m_handlers.end());
 
-  if (size == 0)
-    return true;
+  // if (size == 0)
+  //   return true;
 
   return m_write_channel->write(id, size, data);
 }

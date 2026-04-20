@@ -31,6 +31,8 @@ Segment::create(uint32_t size) {
     throw torrent::internal_error("mmap() failed: " + std::string(std::strerror(errno)));
   }
 
+  std::memset(addr, 0, size);
+
   m_size = size;
   m_addr = addr;
 }

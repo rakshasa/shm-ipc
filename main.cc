@@ -189,7 +189,7 @@ child_process(torrent::shm::Router* router) {
                            [child_handler](void* data, uint32_t size) { child_handler->on_read(data, size); },
                            [child_handler](void* data, uint32_t size) { child_handler->on_error(data, size); });
 
-  for (int i = 0; i < 20; ++i) {
+  for (int i = 0; ; ++i) {
     if (check_socket_closed(router->file_descriptor())) {
       std::cout << "Child process: socket closed, exiting..." << std::endl;
       break;
@@ -272,7 +272,7 @@ main() {
 
   factory.initialize(1 * torrent::shm::Segment::page_size);
 
-  pid_t pid = ::fork();
+  pid_t pid = fork();
 
   if (pid == -1)
     throw std::runtime_error("fork() failed: " + std::string(strerror(errno)));
