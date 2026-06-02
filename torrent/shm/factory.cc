@@ -28,13 +28,13 @@ RouterFactory::initialize(uint32_t segment_size) {
 
   int socket_pair[2]{};
 
-  if (socketpair(AF_LOCAL, SOCK_STREAM, 0, socket_pair) == -1)
+  if (::socketpair(AF_LOCAL, SOCK_STREAM, 0, socket_pair) == -1)
     throw internal_error("RouterFactory::initialize(): socketpair() failed: " + std::string(strerror(errno)));
 
-  if (fcntl(socket_pair[0], F_SETFL, O_NONBLOCK) == -1)
+  if (::fcntl(socket_pair[0], F_SETFL, O_NONBLOCK) == -1)
     throw internal_error("RouterFactory::initialize(): fcntl() failed: " + std::string(strerror(errno)));
 
-  if (fcntl(socket_pair[1], F_SETFL, O_NONBLOCK) == -1)
+  if (::fcntl(socket_pair[1], F_SETFL, O_NONBLOCK) == -1)
     throw internal_error("RouterFactory::initialize(): fcntl() failed: " + std::string(strerror(errno)));
 
   m_socket_1 = socket_pair[0];

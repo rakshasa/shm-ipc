@@ -1,9 +1,13 @@
+#include <chrono>
 #include <execinfo.h>
 #include <fcntl.h>
 #include <iostream>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <thread>
 #include <unistd.h>
+
+#include "common.h"
 
 #include "torrent/shm/segment.h"
 #include "torrent/shm/channel.h"
@@ -11,13 +15,18 @@
 #include "torrent/shm/router.h"
 
 // handle segfault and other signals by closing fd
-int                   g_fd_to_close_on_signal = -1;
-torrent::shm::Router* g_router = nullptr;
+int                   g_fd_to_close_on_signal{-1};
+torrent::shm::Router* g_router{};
+
+std::atomic<bool>     g_should_shutdown{};
 
 void
 do_panic(int signum) {
+  signal(signum, SIG_DFL);
+  signal(SIGABRT, SIG_DFL);
+
   if (g_router) {
-    std::string msg = "Process terminated due to signal: " + std::to_string(signum);
+    std::string msg = "Process terminated due to signal: g_router : " + std::to_string(signum);
 
     void* stackPtrs[20];
 
@@ -34,115 +43,43 @@ do_panic(int signum) {
 
   // If we don't close the socketpair fd, then the other process won't get EOF. (on macos, not
   // tested on other archs)
-  if (g_fd_to_close_on_signal != -1) {
-    close(g_fd_to_close_on_signal);
-    g_fd_to_close_on_signal = -1;
-  }
+  // if (g_fd_to_close_on_signal != -1) {
+  //   close(g_fd_to_close_on_signal);
+  //   g_fd_to_close_on_signal = -1;
+  // }
 
   std::cerr << "Process terminating due to signal: " << signum << std::endl;
-
-  signal(signum, SIG_DFL);
-  signal(SIGABRT, SIG_DFL);
 
   abort();
 }
 
-struct NewChannelMessage {
-  uint32_t id;
-};
+void
+do_signal_shutdown(int) {
+  g_should_shutdown = true;
 
-struct TestHandler {
-  void on_read(void* data, uint32_t size) {
-    if (size == 0) {
-      std::cout << "TestHandler received close message: id:" << id << std::endl;
-      return;
-    }
-
-    std::cout << "TestHandler received message: id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
-  }
-
-  void on_error(void* data, uint32_t size) {
-    std::cout << "TestHandler received error:   id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
-  }
-
-  uint32_t id;
-};
-
-struct ParentHandler {
-  void on_read(void* data, uint32_t size) {
-    if (size == 0)
-      throw std::runtime_error("ParentHandler received close message");
-
-    std::cout << "ParentHandler received message: id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
-
-    throw std::runtime_error("ParentHandler throwing error as test");
-  }
-
-  void on_error(void* data, uint32_t size) {
-    std::cout << "ParentHandler received error:   id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
-    throw std::runtime_error("ParentHandler throwing error as test");
-  }
-
-  TestHandler* create_new_channel(torrent::shm::Router* router);
-
-  uint32_t id;
-};
-
-TestHandler*
-ParentHandler::create_new_channel(torrent::shm::Router* router) {
-  auto handler = new TestHandler{};
-
-  handler->id = router->register_handler([handler](void* data, uint32_t size) { handler->on_read(data, size); },
-                                         [handler](void* data, uint32_t size) { handler->on_error(data, size); });
-
-  std::cout << "ParentHandler created new channel with id: " << handler->id << std::endl;
-
-  // Send a message to ChildHandler to tell it the id of this new channel.
-
-  NewChannelMessage msg;
-  msg.id = handler->id;
-
-  if (!router->write(id, sizeof(msg), &msg))
-    throw std::runtime_error("ParentHandler failed to send new channel message");
-
-  return handler;
+  // TODO: Poke the main process thread.
+  // TODO: Check if errno should be saved.
 }
 
-struct ChildHandler {
-  void on_read(void* data, uint32_t size);
-
-  void on_error(void* data, uint32_t size) {
-    std::cout << "ChildHandler received error:   id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
-    throw std::runtime_error("ChildHandler throwing error as test");
-  }
-
-  torrent::shm::Router*     router;
-  uint32_t                  id;
-  std::vector<TestHandler*> channels;
-};
+void
+register_signal_shutdown() {
+  signal(SIGTERM, do_signal_shutdown);
+  signal(SIGINT,  do_signal_shutdown);
+}
 
 void
-ChildHandler::on_read(void* data, uint32_t size) {
+TestHandler::on_read(void* data, uint32_t size) {
   if (size == 0) {
-    std::cout << "ChildHandler received close message: id:" << id << std::endl;
+    std::cout << "TestHandler received close message: id:" << id << std::endl;
     return;
   }
 
-  // Add a new channel id:
-  if (size != sizeof(NewChannelMessage))
-    throw std::runtime_error("ChildHandler received message with invalid size for new channel message");
+  std::cout << "TestHandler received message: id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
+}
 
-  auto* msg = static_cast<NewChannelMessage*>(data);
-  std::cout << "ChildHandler received new channel message with id: " << msg->id << std::endl;
-
-  auto handler = new TestHandler{};
-  handler->id = msg->id;
-
-  channels.push_back(handler);
-
-  router->register_handler(handler->id,
-                           [handler](void* data, uint32_t size) { handler->on_read(data, size); },
-                           [handler](void* data, uint32_t size) { handler->on_error(data, size); });
+void
+TestHandler::on_error(void* data, uint32_t size) {
+  std::cout << "TestHandler received error:   id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
 }
 
 bool
@@ -175,88 +112,6 @@ check_socket_closed(int fd) {
   return false;
 }
 
-void
-child_process(torrent::shm::Router* router) {
-  std::cout << "Child process started, reading messages..." << std::endl;
-
-  g_router = router;
-
-  auto child_handler = new ChildHandler{};
-  child_handler->id = 1;
-  child_handler->router = router;
-
-  router->register_handler(1,
-                           [child_handler](void* data, uint32_t size) { child_handler->on_read(data, size); },
-                           [child_handler](void* data, uint32_t size) { child_handler->on_error(data, size); });
-
-  for (int i = 0; ; ++i) {
-    if (check_socket_closed(router->file_descriptor())) {
-      std::cout << "Child process: socket closed, exiting..." << std::endl;
-      break;
-    }
-
-    std::cout << "Child process checking for message..." << std::endl;
-    router->process_reads();
-
-    if (i % 5 == 0) {
-      const char* message = "Hello from child process!";
-      std::cout << "Child process writing message..." << std::endl;
-
-      if (child_handler->channels.empty()) {
-        std::cout << "Child process: no channels to write to, waiting..." << std::endl;
-        sleep(1);
-        continue;
-      }
-
-      uint32_t id = child_handler->channels[i % child_handler->channels.size()]->id;
-
-      while (!router->write(id, strlen(message) + 1, (void*)message)) {
-        std::cout << "Child process: channel full, waiting..." << std::endl;
-        usleep(1000); // 100 ms
-      }
-    }
-
-    sleep(1);
-  }
-}
-
-void
-parent_process(torrent::shm::Router* router) {
-  std::cout << "Parent process started, writing messages..." << std::endl;
-
-  auto parent_handler = new ParentHandler{};
-  parent_handler->id = 1;
-
-  router->register_handler(1,
-                           [parent_handler](void* data, uint32_t size) { parent_handler->on_read(data, size); },
-                           [parent_handler](void* data, uint32_t size) { parent_handler->on_error(data, size); });
-
-  auto handler_1 = parent_handler->create_new_channel(router);
-  auto handler_2 = parent_handler->create_new_channel(router);
-
-  for (int i = 0; ; ++i) {
-    if (check_socket_closed(router->file_descriptor())) {
-      std::cout << "Parent process: socket closed, exiting..." << std::endl;
-      break;
-    }
-
-    std::cout << "Parent process checking for message..." << std::endl;
-    router->process_reads();
-
-    std::cout << "Parent process writing message..." << std::endl;
-    const char* message = "Hello from parent process!";
-
-    uint32_t id = (i % 2 == 0) ? handler_1->id : handler_2->id;
-
-    while (!router->write(id, strlen(message) + 1, (void*)message)) {
-      std::cout << "Parent process: channel full, waiting..." << std::endl;
-      usleep(1000); // 100 ms
-    }
-
-    sleep(1);
-  }
-}
-
 int
 main() {
   // add signal handlers:
@@ -278,8 +133,6 @@ main() {
     throw std::runtime_error("fork() failed: " + std::string(strerror(errno)));
 
   if (pid == 0) {
-    // sleep(15);
-
     auto router = factory.create_child_router();
 
     g_fd_to_close_on_signal = router->file_descriptor();
@@ -300,6 +153,7 @@ main() {
 
     try {
       parent_process(router.get());
+
     } catch (const std::exception& e) {
       std::cerr << "Parent process exception: " << e.what() << std::endl;
     }

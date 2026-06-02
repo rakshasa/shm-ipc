@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <sys/socket.h>
 
+#include <fcntl.h>
+
 #include "torrent/exceptions.h"
 #include "torrent/shm/channel.h"
 #include "torrent/shm/segment.h"
@@ -157,6 +159,10 @@ void
 Router::send_fatal_error(const char* msg, uint32_t size) {
   if (m_fd == -1)
     throw torrent::internal_error("Router::send_fatal_error(): no file descriptor to send error message on");
+
+  // Clear non-block to ensure the error message is sent.
+  // if (::fcntl(m_fd, F_SETFL, 0) == -1)
+  //   throw internal_error("RouterFactory::initialize(): fcntl() failed: " + std::string(strerror(errno)));
 
   if (::send(m_fd, msg, size, 0) == -1)
     throw torrent::internal_error("Router::send_fatal_error(): failed to send error message");

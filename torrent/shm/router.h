@@ -65,6 +65,7 @@ public:
 
   void                process_reads();
 
+  void                send_fatal_error(const std::string& msg);
   void                send_fatal_error(const char* msg, uint32_t size);
 
 private:
@@ -83,7 +84,8 @@ private:
   handler_map         m_handlers;
 };
 
-inline int Router::file_descriptor() const { return m_fd; }
+inline int  Router::file_descriptor() const                  { return m_fd; }
+inline void Router::send_fatal_error(const std::string& msg) { send_fatal_error(msg.c_str(), msg.size()); }
 
 } // namespace torrent::shm
 
