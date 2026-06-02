@@ -7,9 +7,6 @@
 #include "torrent/shm/router.h"
 
 
-extern torrent::shm::Router* g_router;
-
-
 struct ChildHandler {
   void on_read(void* data, uint32_t size);
 
@@ -56,9 +53,10 @@ void
 child_process(torrent::shm::Router* router) {
   register_signal_shutdown();
 
-  std::cout << "Child process started: fd:" << router->file_descriptor() << std::endl;
+  std::cout << "Child process started: fd." << std::endl;
 
-  g_router = router;
+  router->register_control_closed_handler([](int error_code) { handle_control_closed("Child", error_code); });
+  router->register_control_message_handler([](auto msg) { handle_control_message("Child", msg); });
 
   auto child_handler = new ChildHandler{};
   child_handler->id = 1;
@@ -71,10 +69,10 @@ child_process(torrent::shm::Router* router) {
   auto last_write = std::chrono::steady_clock::now();
 
   for (int i = 0; ; ++i) {
-    if (check_socket_closed(router->file_descriptor())) {
-      std::cout << "Child process: socket closed, exiting..." << std::endl;
-      break;
-    }
+    // if (check_socket_closed(router->file_descriptor())) {
+    //   std::cout << "Child process: socket closed, exiting..." << std::endl;
+    //   break;
+    // }
 
     if (g_should_shutdown) {
       std::cout << "Child process: shutdown signal received, exiting..." << std::endl;

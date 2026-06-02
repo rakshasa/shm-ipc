@@ -3,17 +3,21 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
 
 namespace torrent::shm {
   class Router;
 }
 
 extern std::atomic<bool> g_should_shutdown;
+extern std::atomic<bool> g_control_fd_closed;
 
 void parent_process(torrent::shm::Router* router);
 void child_process(torrent::shm::Router* router);
 
-bool check_socket_closed(int fd);
+void handle_control_closed(const char* name, int error_code);
+void handle_control_message(const char* name, std::string msg);
+
 void register_signal_shutdown();
 
 //

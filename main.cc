@@ -15,10 +15,10 @@
 #include "torrent/shm/router.h"
 
 // handle segfault and other signals by closing fd
-int                   g_fd_to_close_on_signal{-1};
 torrent::shm::Router* g_router{};
 
 std::atomic<bool>     g_should_shutdown{};
+std::atomic<bool>     g_control_fd_closed{};
 
 void
 do_panic(int signum) {
@@ -38,15 +38,7 @@ do_panic(int signum) {
       msg += "\n" + std::string(stackStrings[i]);
 
     g_router->send_fatal_error(msg.c_str(), msg.size());
-    g_fd_to_close_on_signal = -1;
   }
-
-  // If we don't close the socketpair fd, then the other process won't get EOF. (on macos, not
-  // tested on other archs)
-  // if (g_fd_to_close_on_signal != -1) {
-  //   close(g_fd_to_close_on_signal);
-  //   g_fd_to_close_on_signal = -1;
-  // }
 
   std::cerr << "Process terminating due to signal: " << signum << std::endl;
 
@@ -59,6 +51,23 @@ do_signal_shutdown(int) {
 
   // TODO: Poke the main process thread.
   // TODO: Check if errno should be saved.
+}
+
+void
+handle_control_closed(const char* name, int error_code) {
+  if (error_code == 0)
+    std::cout << name << " process: control fd closed normally." << std::endl;
+  else
+    std::cout << name << " process: control fd closed with error code: " << error_code << std::endl;
+
+  g_should_shutdown   = true;
+  g_control_fd_closed = true;
+}
+
+void
+handle_control_message(const char* name, std::string msg) {
+  std::cout << name << " process: received control message: "
+            << std::endl << std::endl << msg << std::endl << std::endl;
 }
 
 void
@@ -84,8 +93,6 @@ TestHandler::on_error(void* data, uint32_t size) {
 
 bool
 check_socket_closed(int fd) {
-  errno = 0;
-
   char buffer[2048];
   ssize_t result = recv(fd, buffer, sizeof(buffer), MSG_DONTWAIT);
 
@@ -135,7 +142,7 @@ main() {
   if (pid == 0) {
     auto router = factory.create_child_router();
 
-    g_fd_to_close_on_signal = router->file_descriptor();
+    g_router = router.get();
 
     try {
       child_process(router.get());
@@ -148,8 +155,6 @@ main() {
 
   } else {
     auto router = factory.create_parent_router();
-
-    g_fd_to_close_on_signal = router->file_descriptor();
 
     try {
       parent_process(router.get());

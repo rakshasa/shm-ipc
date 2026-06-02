@@ -10,20 +10,33 @@
 
 #include "torrent/exceptions.h"
 #include "torrent/shm/channel.h"
+#include "torrent/shm/control_fd.h"
 #include "torrent/shm/segment.h"
 
 namespace torrent::shm {
 
 Router::Router(int fd, std::unique_ptr<Segment> read_segment, std::unique_ptr<Segment> write_segment)
   : m_read_segment(std::move(read_segment)),
-    m_write_segment(std::move(write_segment)),
-    m_fd(fd) {
+    m_write_segment(std::move(write_segment)) {
+
+  m_control_fd = std::make_unique<ControlFd>();
+  m_control_fd->open(fd);
 
   m_read_channel  = static_cast<Channel*>(m_read_segment->address());
   m_write_channel = static_cast<Channel*>(m_write_segment->address());
 }
 
 Router::~Router() = default;
+
+void
+Router::register_control_closed_handler(std::function<void(int)>&& fn) {
+  m_control_fd->register_closed_handler(std::move(fn));
+}
+
+void
+Router::register_control_message_handler(std::function<void(std::string)>&& fn) {
+  m_control_fd->register_message_handler(std::move(fn));
+}
 
 uint32_t
 Router::register_handler(data_func on_read, data_func on_error) {
@@ -157,18 +170,21 @@ Router::process_reads() {
 
 void
 Router::send_fatal_error(const char* msg, uint32_t size) {
-  if (m_fd == -1)
-    throw torrent::internal_error("Router::send_fatal_error(): no file descriptor to send error message on");
+  // if (m_fd == -1)
+  //   throw torrent::internal_error("Router::send_fatal_error(): no file descriptor to send error message on");
 
-  // Clear non-block to ensure the error message is sent.
-  // if (::fcntl(m_fd, F_SETFL, 0) == -1)
-  //   throw internal_error("RouterFactory::initialize(): fcntl() failed: " + std::string(strerror(errno)));
+  // // Clear non-block to ensure the error message is sent.
+  // // if (::fcntl(m_fd, F_SETFL, 0) == -1)
+  // //   throw internal_error("RouterFactory::initialize(): fcntl() failed: " + std::string(strerror(errno)));
 
-  if (::send(m_fd, msg, size, 0) == -1)
-    throw torrent::internal_error("Router::send_fatal_error(): failed to send error message");
+  // if (::send(m_fd, msg, size, 0) == -1)
+  //   throw torrent::internal_error("Router::send_fatal_error(): failed to send error message");
 
-  ::close(m_fd);
-  m_fd = -1;
+  // ::close(m_fd);
+  // m_fd = -1;
+
+  m_control_fd->send_fatal_error(msg, size);
+  m_control_fd->close();
 }
 
 } // namespace torrent::shm

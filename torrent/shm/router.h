@@ -23,6 +23,7 @@ namespace torrent::shm {
 
 // Add to common.h
 class Channel;
+class ControlFd;
 class Segment;
 
 struct RouterHandler {
@@ -50,7 +51,8 @@ public:
   Router(int fd, std::unique_ptr<Segment> read_segment, std::unique_ptr<Segment> write_segment);
   ~Router();
 
-  int                 file_descriptor() const;
+  void                register_control_closed_handler(std::function<void(int)>&& fn);
+  void                register_control_message_handler(std::function<void(std::string)>&& fn);
 
   // TODO: Replace uint32_t with struct with member functions.
   uint32_t            register_handler(data_func on_read, data_func on_error);
@@ -71,20 +73,19 @@ public:
 private:
   using handler_map = std::map<uint32_t, RouterHandler>;
 
-  std::unique_ptr<Segment> m_read_segment;
-  std::unique_ptr<Segment> m_write_segment;
+  std::unique_ptr<ControlFd> m_control_fd;
+
+  std::unique_ptr<Segment>   m_read_segment;
+  std::unique_ptr<Segment>   m_write_segment;
 
   Channel*            m_read_channel{};
   Channel*            m_write_channel{};
-
-  // TODO: Make sighandler send stack dump on crash?
-  int                 m_fd;
 
   uint32_t            m_next_id{1};
   handler_map         m_handlers;
 };
 
-inline int  Router::file_descriptor() const                  { return m_fd; }
+// inline int  Router::file_descriptor() const                  { return m_fd; }
 inline void Router::send_fatal_error(const std::string& msg) { send_fatal_error(msg.c_str(), msg.size()); }
 
 } // namespace torrent::shm
