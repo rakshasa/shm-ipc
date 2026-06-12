@@ -24,18 +24,38 @@ RouterFactory::initialize(uint32_t segment_size) {
   static_cast<torrent::shm::Channel*>(m_segment_1->address())->initialize(m_segment_1->address(), m_segment_1->size());
   static_cast<torrent::shm::Channel*>(m_segment_2->address())->initialize(m_segment_2->address(), m_segment_2->size());
 
-  // TODO: Use fd_*()
-
   int socket_pair[2]{};
 
   if (::socketpair(AF_LOCAL, SOCK_STREAM, 0, socket_pair) == -1)
     throw internal_error("RouterFactory::initialize(): socketpair() failed: " + std::string(strerror(errno)));
 
-  if (::fcntl(socket_pair[0], F_SETFL, O_NONBLOCK) == -1)
-    throw internal_error("RouterFactory::initialize(): fcntl() failed: " + std::string(strerror(errno)));
+  // Use timeouts as the control channel should never be able to exhaust buffers.
+  //
+  // Sockets remain blocking on macOS/BSD, but use O_NONBLOCK loops on Linux to respect timeouts.
 
-  if (::fcntl(socket_pair[1], F_SETFL, O_NONBLOCK) == -1)
-    throw internal_error("RouterFactory::initialize(): fcntl() failed: " + std::string(strerror(errno)));
+  auto setup_socket = [](int fd) {
+      struct timeval timeout{2, 0};
+
+      if (::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == -1)
+        throw internal_error("ControlFd::send_fatal_error(): setsockopt(SO_SNDTIMEO) failed: " + std::string(std::strerror(errno)));
+
+      if (::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1)
+        throw internal_error("ControlFd::initialize(): setsockopt(SO_RCVTIMEO) failed: " + std::string(strerror(errno)));
+
+      // Linux kernels require O_NONBLOCK alongside SO_SNDTIMEO to respect timeouts on AF_LOCAL.
+      // macOS and BSD require the socket to remain blocking for the timeout to function.
+
+#ifdef __linux__
+      int flags = ::fcntl(fd, F_GETFL, 0);
+
+      if (flags == -1 || ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
+        throw internal_error("RouterFactory::initialize(): fcntl(O_NONBLOCK) failed: " + std::string(strerror(errno)));
+
+#endif
+    };
+
+  setup_socket(socket_pair[0]);
+  setup_socket(socket_pair[1]);
 
   m_socket_1 = socket_pair[0];
   m_socket_2 = socket_pair[1];

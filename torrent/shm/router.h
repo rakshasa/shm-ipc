@@ -27,16 +27,19 @@ class ControlFd;
 class Segment;
 
 struct RouterHandler {
+  using data_func = std::function<void(void* data, uint32_t size)>;
+
   // We use on_error to indicate close() was called on this side, as we never call on_error after
   // close(). (nor on_read)
-  bool is_closed_read()  { return on_read == nullptr; }
-  bool is_closed_write() { return on_error == nullptr; }
+  bool                is_closed_read()  { return on_read == nullptr; }
+  bool                is_closed_write() { return on_error == nullptr; }
 
   // Use size=0 to indicate close.
   //
   // Set on_read to nullptr to indicate closed from this side.
-  std::function<void(void* data, uint32_t size)> on_read;
-  std::function<void(void* data, uint32_t size)> on_error;
+
+  data_func           on_read;
+  data_func           on_error;
 
   // TODO: add handler for when to resume after write failure due to full channel.
 };
@@ -67,6 +70,7 @@ public:
 
   void                process_reads();
 
+  void                send_shutdown_message();
   void                send_fatal_error(const std::string& msg);
   void                send_fatal_error(const char* msg, uint32_t size);
 

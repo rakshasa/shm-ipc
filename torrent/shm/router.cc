@@ -169,6 +169,11 @@ Router::process_reads() {
 }
 
 void
+Router::send_shutdown_message() {
+  m_control_fd->send_shutdown_message();
+}
+
+void
 Router::send_fatal_error(const char* msg, uint32_t size) {
   // if (m_fd == -1)
   //   throw torrent::internal_error("Router::send_fatal_error(): no file descriptor to send error message on");

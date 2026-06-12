@@ -75,6 +75,8 @@ parent_process(torrent::shm::Router* router) {
 
   std::chrono::steady_clock::time_point shutdown_timestamp{};
 
+  auto last_write = std::chrono::steady_clock::now();
+
   auto m_poll = torrent::system::Poll::create();
 
   try {
@@ -83,10 +85,13 @@ parent_process(torrent::shm::Router* router) {
 
     for (int i = 0; ; ++i) {
       if (g_should_shutdown) {
-        if (shutdown_timestamp == std::chrono::steady_clock::time_point{}) {
+        if (shutdown_timestamp.time_since_epoch() == 0s) {
           shutdown_timestamp = std::chrono::steady_clock::now();
 
           std::cout << "Parent process: shutdown signal received, waiting for graceful shutdown..." << std::endl;
+
+          // Send children shutdown message on channel 0.
+
           continue;
         }
 
@@ -99,27 +104,26 @@ parent_process(torrent::shm::Router* router) {
 
       }
 
-      // if (check_socket_closed(router->file_descriptor())) {
-      //   std::cout << "Parent process: socket closed, exiting..." << std::endl;
-      //   break;
-      // }
-
       std::cout << "Parent process checking for message..." << std::endl;
 
       router->process_reads();
 
-      std::cout << "Parent process writing message..." << std::endl;
+      if (std::chrono::steady_clock::now() - last_write > 1s) {
+        std::cout << "Parent process writing message..." << std::endl;
 
-      const char* message = "Hello from PARENT process!";
+        uint32_t id = (i % 2 == 0) ? handler_1->id : handler_2->id;
 
-      uint32_t id = (i % 2 == 0) ? handler_1->id : handler_2->id;
+        const char* message = "Hello from PARENT process!";
 
-      if (!router->write(id, strlen(message) + 1, (void*)message)) {
-        std::cout << "Parent process: channel full, waiting..." << std::endl;
-        std::this_thread::sleep_for(100ms);
+        if (!router->write(id, strlen(message) + 1, (void*)message)) {
+          std::cout << "Parent process: channel full, waiting..." << std::endl;
+          std::this_thread::sleep_for(100ms);
 
-        i--;
-        continue;
+          i--;
+
+        } else {
+          last_write = std::chrono::steady_clock::now();
+        }
       }
 
       //
@@ -128,13 +132,14 @@ parent_process(torrent::shm::Router* router) {
 
       // process_events();
 
-      // auto timeout = std::max(next_timeout(), std::chrono::microseconds(0));
-      auto timeout = 0ms;
+      auto timeout = 1s - (std::chrono::steady_clock::now() - last_write);
 
-      // if (!m_scheduler->empty())
-      //   timeout = std::min(timeout, m_scheduler->next_timeout());
+      if (timeout < std::chrono::steady_clock::duration::zero())
+        timeout = std::chrono::steady_clock::duration::zero();
 
-      [[maybe_unused]] int event_count = m_poll->do_poll(timeout.count());
+      std::cout << "Parent process polling for events with timeout: " << std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count() << "ms" << std::endl;
+
+      [[maybe_unused]] int event_count = m_poll->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
     }
 
   } catch (const torrent::internal_error& e) {

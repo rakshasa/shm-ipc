@@ -1,7 +1,10 @@
-#include <iostream>
-
 #include "common.h"
 
+#include <algorithm>
+#include <iostream>
+
+#include "torrent/exceptions.h"
+#include "torrent/system/poll.h"
 #include "torrent/shm/segment.h"
 #include "torrent/shm/channel.h"
 #include "torrent/shm/router.h"
@@ -68,42 +71,88 @@ child_process(torrent::shm::Router* router) {
 
   auto last_write = std::chrono::steady_clock::now();
 
-  for (int i = 0; ; ++i) {
-    // if (check_socket_closed(router->file_descriptor())) {
-    //   std::cout << "Child process: socket closed, exiting..." << std::endl;
-    //   break;
-    // }
+  auto m_poll = torrent::system::Poll::create();
 
-    if (g_should_shutdown) {
-      std::cout << "Child process: shutdown signal received, exiting..." << std::endl;
+  try {
 
-      router->send_fatal_error("Child process shutting down due to interrupt signal");
-      break;
-    }
+    m_poll->init_thread();
 
-    std::cout << "Child process checking for message..." << std::endl;
-    router->process_reads();
+    for (int i = 0; ; ++i) {
+      // if (g_should_shutdown) {
+      //   if (shutdown_timestamp == std::chrono::steady_clock::time_point{}) {
+      //     shutdown_timestamp = std::chrono::steady_clock::now();
 
-    if (std::chrono::steady_clock::now() - last_write > 5s) {
-      last_write = std::chrono::steady_clock::now();
+      //     std::cout << "Child process: shutdown signal received, waiting for graceful shutdown..." << std::endl;
+      //     continue;
+      //   }
 
-      const char* message = "Hello from CHILD process!";
-      std::cout << "Child process writing message..." << std::endl;
+      //   if (std::chrono::steady_clock::now() - shutdown_timestamp > 5s) {
+      //     std::cout << "Child process: graceful shutdown timeout exceeded, exiting..." << std::endl;
+      //     break;
+      //   }
 
-      if (child_handler->channels.empty()) {
-        std::cout << "Child process: no channels to write to, waiting..." << std::endl;
-        continue;
+      //   // If control_fd is closed, we can exit immediately.
+
+      // }
+
+      std::cout << "Child process checking for message..." << std::endl;
+
+      router->process_reads();
+
+      if (std::chrono::steady_clock::now() - last_write > 5s) {
+        std::cout << "Child process writing message..." << std::endl;
+
+        if (child_handler->channels.empty()) {
+          std::cout << "Child process: no channels to write to, waiting..." << std::endl;
+          last_write = std::chrono::steady_clock::now();
+
+          ///////////////////
+
+        } else {
+
+          uint32_t id = child_handler->channels[i % child_handler->channels.size()]->id;
+
+          const char* message = "Hello from CHILD process!";
+
+          // while (!router->write(id, strlen(message) + 1, (void*)message)) {
+          if (!router->write(id, strlen(message) + 1, (void*)message)) {
+            std::cout << "Child process: channel full, waiting..." << std::endl;
+            std::this_thread::sleep_for(100ms);
+
+            i--;
+
+            /////////////
+          } else {
+            last_write = std::chrono::steady_clock::now();
+          }
+        }
       }
 
-      uint32_t id = child_handler->channels[i % child_handler->channels.size()]->id;
+      //
+      // Thread:
+      //
 
-      while (!router->write(id, strlen(message) + 1, (void*)message)) {
-        std::cout << "Child process: channel full, waiting..." << std::endl;
-        std::this_thread::sleep_for(100ms);
-      }
+      // process_events();
+
+      auto timeout = 5s - (std::chrono::steady_clock::now() - last_write);
+
+      std::cout << "Child process calculated timeout: " << std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count() << " ms" << std::endl;
+
+      if (timeout < std::chrono::steady_clock::duration::zero())
+        timeout = std::chrono::steady_clock::duration::zero();
+
+      // if (!m_scheduler->empty())
+      //   timeout = std::min(timeout, m_scheduler->next_timeout());
+
+      std::cout << "Child process polling with timeout: " << std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count() << " ms" << std::endl;
+
+      [[maybe_unused]] int event_count = m_poll->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
     }
 
-    // Wait for event.
-    std::this_thread::sleep_for(1s);
+  } catch (const torrent::internal_error& e) {
+    m_poll->cleanup_thread();
+    throw;
   }
+
+  m_poll->cleanup_thread();
 }
