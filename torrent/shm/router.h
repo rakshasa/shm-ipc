@@ -70,12 +70,17 @@ public:
 
   void                process_reads();
 
-  void                send_shutdown_message();
+  void                send_graceful_shutdown();
+  void                send_forceful_shutdown();
+
   void                send_fatal_error(const std::string& msg);
   void                send_fatal_error(const char* msg, uint32_t size);
 
 private:
   using handler_map = std::map<uint32_t, RouterHandler>;
+
+  // TODO: Add a flag to shm that indicates if the other side is in an event loop and will soon
+  // check the channel. This avoids unnessesary writes of wakeup messages.
 
   std::unique_ptr<ControlFd> m_control_fd;
 

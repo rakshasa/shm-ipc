@@ -22,10 +22,12 @@ public:
   void                register_shutdown_handler(std::function<void(bool)>&& fn);
   void                register_message_handler(std::function<void(std::string)>&& fn);
 
-  void                send_shutdown_message(bool graceful);
+  void                send_graceful_shutdown();
+  void                send_forceful_shutdown();
   void                send_fatal_error(const char* msg, uint32_t size);
 
 private:
+  void                send_shutdown_message(bool graceful);
   void                send_message_internal(const char* msg, uint32_t size);
 
   void                event_read() override;
@@ -40,6 +42,9 @@ private:
 inline void ControlFd::register_closed_handler(std::function<void(int)>&& fn)          { m_slot_closed = std::move(fn); }
 inline void ControlFd::register_shutdown_handler(std::function<void(bool)>&& fn)       { m_slot_shutdown = std::move(fn); }
 inline void ControlFd::register_message_handler(std::function<void(std::string)>&& fn) { m_slot_message = std::move(fn); }
+
+inline void ControlFd::send_graceful_shutdown() { send_shutdown_message(true); }
+inline void ControlFd::send_forceful_shutdown() { send_shutdown_message(false); }
 
 } // namespace torrent::shm
 

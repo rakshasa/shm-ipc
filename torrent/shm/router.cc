@@ -169,8 +169,13 @@ Router::process_reads() {
 }
 
 void
-Router::send_shutdown_message() {
-  m_control_fd->send_shutdown_message();
+Router::send_graceful_shutdown() {
+  m_control_fd->send_graceful_shutdown();
+}
+
+void
+Router::send_forceful_shutdown() {
+  m_control_fd->send_forceful_shutdown();
 }
 
 void

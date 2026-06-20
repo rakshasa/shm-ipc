@@ -13,16 +13,16 @@
 struct ParentHandler {
   void on_read(void* data, uint32_t size) {
     if (size == 0)
-      throw std::runtime_error("ParentHandler received close message");
+      throw std::runtime_error("PARENT:HANDLER: received close message");
 
-    std::cout << "ParentHandler received message: id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
+    std::cout << "PARENT:HANDLER: received message: id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
 
-    throw std::runtime_error("ParentHandler throwing error as test");
+    throw std::runtime_error("PARENT:HANDLER: throwing error as test");
   }
 
   void on_error(void* data, uint32_t size) {
-    std::cout << "ParentHandler received error:   id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
-    throw std::runtime_error("ParentHandler throwing error as test");
+    std::cout << "PARENT:HANDLER: received error:   id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
+    throw std::runtime_error("PARENT:HANDLER: throwing error as test");
   }
 
   TestHandler* create_new_channel(torrent::shm::Router* router);
@@ -37,7 +37,7 @@ ParentHandler::create_new_channel(torrent::shm::Router* router) {
   handler->id = router->register_handler([handler](void* data, uint32_t size) { handler->on_read(data, size); },
                                          [handler](void* data, uint32_t size) { handler->on_error(data, size); });
 
-  std::cout << "ParentHandler created new channel with id: " << handler->id << std::endl;
+  std::cout << "PARENT:HANDLER: created new channel with id: " << handler->id << std::endl;
 
   // Send a message to ChildHandler to tell it the id of this new channel.
 
@@ -45,7 +45,7 @@ ParentHandler::create_new_channel(torrent::shm::Router* router) {
   msg.id = handler->id;
 
   if (!router->write(id, sizeof(msg), &msg))
-    throw std::runtime_error("ParentHandler failed to send new channel message");
+    throw std::runtime_error("PARENT:HANDLER: failed to send new channel message");
 
   return handler;
 }
@@ -58,10 +58,10 @@ void
 parent_process(torrent::shm::Router* router) {
   register_signal_shutdown();
 
-  std::cout << "Parent process started: fd." << std::endl;
+  std::cout << "PARENT: started: fd." << std::endl;
 
-  router->register_control_closed_handler([](int error_code) { handle_control_closed("Parent", error_code); });
-  router->register_control_message_handler([](auto msg) { handle_control_message("Parent", msg); });
+  router->register_control_closed_handler([](int error_code) { handle_control_closed("PARENT:CONTROL", error_code); });
+  router->register_control_message_handler([](auto msg)      { handle_control_message("PARENT:CONTROL", msg); });
 
   auto parent_handler = new ParentHandler{};
   parent_handler->id = 1;
@@ -88,15 +88,15 @@ parent_process(torrent::shm::Router* router) {
         if (shutdown_timestamp.time_since_epoch() == 0s) {
           shutdown_timestamp = std::chrono::steady_clock::now();
 
-          std::cout << "Parent process: shutdown signal received, waiting for graceful shutdown..." << std::endl;
+          std::cout << "PARENT: shutdown signal received, waiting for graceful shutdown..." << std::endl;
 
-          // Send children shutdown message on channel 0.
-
+          router->send_graceful_shutdown();
           continue;
         }
 
         if (std::chrono::steady_clock::now() - shutdown_timestamp > 5s) {
-          std::cout << "Parent process: graceful shutdown timeout exceeded, exiting..." << std::endl;
+          std::cout << "PARENT: graceful shutdown timeout exceeded, exiting..." << std::endl;
+          router->send_forceful_shutdown();
           break;
         }
 
@@ -104,19 +104,19 @@ parent_process(torrent::shm::Router* router) {
 
       }
 
-      std::cout << "Parent process checking for message..." << std::endl;
+      std::cout << "PARENT: checking for message..." << std::endl;
 
       router->process_reads();
 
       if (std::chrono::steady_clock::now() - last_write > 1s) {
-        std::cout << "Parent process writing message..." << std::endl;
+        std::cout << "PARENT: writing message..." << std::endl;
 
         uint32_t id = (i % 2 == 0) ? handler_1->id : handler_2->id;
 
         const char* message = "Hello from PARENT process!";
 
-        if (!router->write(id, strlen(message) + 1, (void*)message)) {
-          std::cout << "Parent process: channel full, waiting..." << std::endl;
+        if (!router->write(id, strlen(message), (void*)message)) {
+          std::cout << "PARENT: channel full, waiting..." << std::endl;
           std::this_thread::sleep_for(100ms);
 
           i--;
@@ -137,7 +137,7 @@ parent_process(torrent::shm::Router* router) {
       if (timeout < std::chrono::steady_clock::duration::zero())
         timeout = std::chrono::steady_clock::duration::zero();
 
-      std::cout << "Parent process polling for events with timeout: " << std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count() << "ms" << std::endl;
+      std::cout << "PARENT: polling for events with timeout: " << std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count() << "ms" << std::endl;
 
       [[maybe_unused]] int event_count = m_poll->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
     }
