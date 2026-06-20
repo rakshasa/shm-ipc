@@ -12,6 +12,7 @@
 #include "torrent/shm/channel.h"
 #include "torrent/shm/control_fd.h"
 #include "torrent/shm/segment.h"
+#include "torrent/system/poll.h"
 
 namespace torrent::shm {
 
@@ -27,6 +28,13 @@ Router::Router(int fd, std::unique_ptr<Segment> read_segment, std::unique_ptr<Se
 }
 
 Router::~Router() = default;
+
+void
+Router::open_control_fd() {
+  torrent::this_thread::poll()->open(m_control_fd.get());
+  torrent::this_thread::poll()->insert_read(m_control_fd.get());
+  torrent::this_thread::poll()->insert_error(m_control_fd.get());
+}
 
 void
 Router::register_control_closed_handler(std::function<void(int)>&& fn) {
@@ -194,6 +202,8 @@ Router::send_fatal_error(const char* msg, uint32_t size) {
   // m_fd = -1;
 
   m_control_fd->send_fatal_error(msg, size);
+
+  torrent::this_thread::poll()->remove_and_close(m_control_fd.get());
   m_control_fd->close();
 }
 

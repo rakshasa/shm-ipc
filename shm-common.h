@@ -1,16 +1,21 @@
-#ifndef SHMIPC_COMMON_H
-#define SHMIPC_COMMON_H
+#ifndef SHMIPC_SHM_COMMON_H
+#define SHMIPC_SHM_COMMON_H
 
 #include <atomic>
 #include <cstdint>
 #include <string>
 
 namespace torrent::shm {
-  class Router;
+class Router;
 }
 
-extern std::atomic<bool> g_should_shutdown;
-extern std::atomic<bool> g_control_fd_closed;
+namespace torrent::system {
+class Poll;
+}
+
+extern std::atomic<bool>      g_should_shutdown;
+extern std::atomic<bool>      g_control_fd_closed;
+extern torrent::system::Poll* g_poll;
 
 void parent_process(torrent::shm::Router* router);
 void child_process(torrent::shm::Router* router);

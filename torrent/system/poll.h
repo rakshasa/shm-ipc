@@ -55,6 +55,8 @@ public:
   void                init_thread();
   void                cleanup_thread();
 
+  unsigned int        process();
+
 private:
   using poll_event_list = std::vector<std::shared_ptr<PollEvent>>;
 
@@ -67,7 +69,6 @@ private:
   Poll& operator=(const Poll&) = delete;
 
   int                 poll(int timeout_usec);
-  unsigned int        process();
 
   bool                m_processing{false};
   poll_event_list     m_closed_events;

@@ -1,4 +1,4 @@
-#include "common.h"
+#include "shm-common.h"
 
 #include <iostream>
 
@@ -56,12 +56,14 @@ ParentHandler::create_new_channel(torrent::shm::Router* router) {
 
 void
 parent_process(torrent::shm::Router* router) {
-  register_signal_shutdown();
+  auto g_poll = torrent::system::Poll::create();
 
-  std::cout << "PARENT: started: fd." << std::endl;
+  register_signal_shutdown();
 
   router->register_control_closed_handler([](int error_code) { handle_control_closed("PARENT:CONTROL", error_code); });
   router->register_control_message_handler([](auto msg)      { handle_control_message("PARENT:CONTROL", msg); });
+
+  std::cout << "PARENT: started: fd." << std::endl;
 
   auto parent_handler = new ParentHandler{};
   parent_handler->id = 1;
@@ -77,11 +79,11 @@ parent_process(torrent::shm::Router* router) {
 
   auto last_write = std::chrono::steady_clock::now();
 
-  auto m_poll = torrent::system::Poll::create();
+  router->open_control_fd();
 
   try {
 
-    m_poll->init_thread();
+    torrent::this_thread::poll()->init_thread();
 
     for (int i = 0; ; ++i) {
       if (g_should_shutdown) {
@@ -139,13 +141,19 @@ parent_process(torrent::shm::Router* router) {
 
       std::cout << "PARENT: polling for events with timeout: " << std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count() << "ms" << std::endl;
 
-      [[maybe_unused]] int event_count = m_poll->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
+      [[maybe_unused]] int event_count = torrent::this_thread::poll()->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
+
+      if (event_count > 0) {
+        std::cout << "PARENT: poll returned with event count: " << event_count << std::endl;
+
+        torrent::this_thread::poll()->process();
+      }
     }
 
   } catch (const torrent::internal_error& e) {
-    m_poll->cleanup_thread();
+    torrent::this_thread::poll()->cleanup_thread();
     throw;
   }
 
-  m_poll->cleanup_thread();
+  torrent::this_thread::poll()->cleanup_thread();
 }

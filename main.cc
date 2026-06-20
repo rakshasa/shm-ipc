@@ -7,7 +7,7 @@
 #include <thread>
 #include <unistd.h>
 
-#include "common.h"
+#include "shm-common.h"
 
 #include "torrent/shm/segment.h"
 #include "torrent/shm/channel.h"
@@ -15,10 +15,12 @@
 #include "torrent/shm/router.h"
 
 // handle segfault and other signals by closing fd
-torrent::shm::Router* g_router{};
 
-std::atomic<bool>     g_should_shutdown{};
-std::atomic<bool>     g_control_fd_closed{};
+torrent::system::Poll* g_poll{};
+torrent::shm::Router*  g_router{};
+
+std::atomic<bool>      g_should_shutdown{};
+std::atomic<bool>      g_control_fd_closed{};
 
 void
 do_panic(int signum) {

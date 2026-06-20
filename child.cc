@@ -1,4 +1,4 @@
-#include "common.h"
+#include "shm-common.h"
 
 #include <algorithm>
 #include <iostream>
@@ -54,12 +54,14 @@ ChildHandler::on_read(void* data, uint32_t size) {
 
 void
 child_process(torrent::shm::Router* router) {
-  register_signal_shutdown();
+  auto g_poll = torrent::system::Poll::create();
 
-  std::cout << "CHILD: started: fd." << std::endl;
+  register_signal_shutdown();
 
   router->register_control_closed_handler([](int error_code) { handle_control_closed("CHILD:CONTROL", error_code); });
   router->register_control_message_handler([](auto msg)      { handle_control_message("CHILD:CONTROL", msg); });
+
+  std::cout << "CHILD: started: fd." << std::endl;
 
   auto child_handler = new ChildHandler{};
   child_handler->id = 1;
@@ -70,12 +72,13 @@ child_process(torrent::shm::Router* router) {
                            [child_handler](void* data, uint32_t size) { child_handler->on_error(data, size); });
 
   auto last_write = std::chrono::steady_clock::now();
+  auto m_poll     = torrent::system::Poll::create();
 
-  auto m_poll = torrent::system::Poll::create();
+  router->open_control_fd();
 
   try {
 
-    m_poll->init_thread();
+    torrent::this_thread::poll()->init_thread();
 
     for (int i = 0; ; ++i) {
       // if (g_should_shutdown) {
@@ -95,6 +98,9 @@ child_process(torrent::shm::Router* router) {
 
       // }
 
+      // if (
+
+
       std::cout << "CHILD: checking for message..." << std::endl;
 
       router->process_reads();
@@ -109,7 +115,6 @@ child_process(torrent::shm::Router* router) {
           ///////////////////
 
         } else {
-
           uint32_t id = child_handler->channels[i % child_handler->channels.size()]->id;
 
           const char* message = "Hello from CHILD process!";
@@ -146,13 +151,19 @@ child_process(torrent::shm::Router* router) {
 
       std::cout << "CHILD: polling with timeout: " << std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count() << " ms" << std::endl;
 
-      [[maybe_unused]] int event_count = m_poll->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
+      [[maybe_unused]] int event_count = torrent::this_thread::poll()->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
+
+      if (event_count > 0) {
+        std::cout << "CHILD: poll returned with event count: " << event_count << std::endl;
+
+        torrent::this_thread::poll()->process();
+      }
     }
 
   } catch (const torrent::internal_error& e) {
-    m_poll->cleanup_thread();
+    torrent::this_thread::poll()->cleanup_thread();
     throw;
   }
 
-  m_poll->cleanup_thread();
+  torrent::this_thread::poll()->cleanup_thread();
 }
