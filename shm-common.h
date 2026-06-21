@@ -14,12 +14,15 @@ class Poll;
 }
 
 extern std::atomic<bool> g_should_shutdown;
+extern std::atomic<bool> g_should_graceful_shutdown;
+extern std::atomic<bool> g_should_forced_shutdown;
 extern std::atomic<bool> g_control_fd_closed;
 
 void parent_process(torrent::shm::Router* router);
 void child_process(torrent::shm::Router* router);
 
 void handle_control_closed(torrent::shm::Router* router, const char* name, int error_code);
+void handle_control_shutdown(const char* name, bool graceful);
 void handle_control_message(const char* name, std::string msg);
 
 void register_signal_shutdown();

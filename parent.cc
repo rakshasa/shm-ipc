@@ -6,11 +6,10 @@
 
 #include "torrent/exceptions.h"
 #include "torrent/system/poll.h"
-
-#include "torrent/shm/segment.h"
+#include "torrent/shm/control_fd.h"
 #include "torrent/shm/channel.h"
 #include "torrent/shm/router.h"
-
+#include "torrent/shm/segment.h"
 
 struct ParentHandler {
   void on_read(void* data, uint32_t size) {
@@ -62,8 +61,9 @@ parent_process(torrent::shm::Router* router) {
 
   register_signal_shutdown();
 
-  router->register_control_closed_handler([router](int error_code) { handle_control_closed(router, "PARENT:CONTROL", error_code); });
-  router->register_control_message_handler([](auto msg)            { handle_control_message("PARENT:CONTROL", msg); });
+  router->control_fd().register_closed_handler([router](int error_code) { handle_control_closed(router, "PARENT:CONTROL", error_code); });
+  router->control_fd().register_shutdown_handler([](bool graceful)      { handle_control_shutdown("PARENT:CONTROL", graceful); });
+  router->control_fd().register_message_handler([](auto msg)            { handle_control_message("PARENT:CONTROL", msg); });
 
   std::cout << "PARENT: started: fd." << std::endl;
 
@@ -90,9 +90,18 @@ parent_process(torrent::shm::Router* router) {
     for (int i = 0; ; ++i) {
       if (g_should_shutdown) {
         if (g_control_fd_closed) {
-          std::cout << "PARENT: control fd closed, exiting immediately." << std::endl;
+
+          if (g_should_graceful_shutdown)
+            std::cout << "PARENT: control fd closed, shutdown was graceful, exiting." << std::endl;
+          else if (g_should_forced_shutdown)
+            std::cout << "PARENT: control fd closed, shutdown was forceful, exiting." << std::endl;
+          else
+            std::cout << "PARENT: control fd closed, shutdown was of unknown type, exiting." << std::endl;
+
           break;
         }
+
+        // Parent waits for child to close.
 
         if (shutdown_timestamp.time_since_epoch() == 0s) {
           shutdown_timestamp = std::chrono::steady_clock::now();
@@ -108,9 +117,6 @@ parent_process(torrent::shm::Router* router) {
           router->send_forceful_shutdown();
           break;
         }
-
-        // If control_fd is closed, we can exit immediately.
-
       }
 
       std::cout << "PARENT: checking for message..." << std::endl;
@@ -157,10 +163,13 @@ parent_process(torrent::shm::Router* router) {
       }
     }
 
-  } catch (const torrent::internal_error& e) {
+  } catch (...) {
+    router->test_close_control_fd();
     torrent::this_thread::poll()->cleanup_thread();
+
     throw;
   }
 
+  router->test_close_control_fd();
   torrent::this_thread::poll()->cleanup_thread();
 }

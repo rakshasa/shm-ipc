@@ -7,9 +7,10 @@
 
 #include "torrent/exceptions.h"
 #include "torrent/system/poll.h"
-#include "torrent/shm/segment.h"
 #include "torrent/shm/channel.h"
+#include "torrent/shm/control_fd.h"
 #include "torrent/shm/router.h"
+#include "torrent/shm/segment.h"
 
 
 struct ChildHandler {
@@ -56,14 +57,15 @@ ChildHandler::on_read(void* data, uint32_t size) {
 
 void
 child_process(torrent::shm::Router* router) {
-  std::this_thread::sleep_for(20s);
+  // std::this_thread::sleep_for(20s);
 
   g_poll = torrent::system::Poll::create();
 
   register_signal_shutdown();
 
-  router->register_control_closed_handler([router](int error_code) { handle_control_closed(router, "CHILD:CONTROL", error_code); });
-  router->register_control_message_handler([](auto msg)            { handle_control_message("CHILD:CONTROL", msg); });
+  router->control_fd().register_closed_handler([router](int error_code) { handle_control_closed(router, "CHILD:CONTROL", error_code); });
+  router->control_fd().register_shutdown_handler([](bool graceful)      { handle_control_shutdown("CHILD:CONTROL", graceful); });
+  router->control_fd().register_message_handler([](auto msg)            { handle_control_message("CHILD:CONTROL", msg); });
 
   std::cout << "CHILD: started: fd." << std::endl;
 
@@ -75,6 +77,8 @@ child_process(torrent::shm::Router* router) {
                            [child_handler](void* data, uint32_t size) { child_handler->on_read(data, size); },
                            [child_handler](void* data, uint32_t size) { child_handler->on_error(data, size); });
 
+  std::chrono::steady_clock::time_point shutdown_timestamp{};
+
   auto last_write = std::chrono::steady_clock::now();
 
   router->open_control_fd();
@@ -84,8 +88,47 @@ child_process(torrent::shm::Router* router) {
     torrent::this_thread::poll()->init_thread();
 
     for (int i = 0; ; ++i) {
-      /////////////////////// ADD SHUTDOWN
+      if (g_should_shutdown) {
 
+        if (g_control_fd_closed) {
+          if (g_should_graceful_shutdown)
+            std::cout << "CHILD: control fd closed, graceful shutdown complete, exiting." << std::endl;
+          else if (g_should_forced_shutdown)
+            std::cout << "CHILD: control fd closed, forceful shutdown complete, exiting." << std::endl;
+          else
+            std::cout << "CHILD: control fd closed, shutdown was of unknown type, exiting." << std::endl;
+
+          // std::cout << "CHILD: control fd closed, exiting immediately." << std::endl;
+          break;
+        }
+
+        // TODO: Graceful shutdown should wait for all channels to be closed, or time out.
+
+        if (g_should_graceful_shutdown) {
+          std::cout << "CHILD: graceful shutdown signal received, exiting immediately..." << std::endl;
+          break;
+        }
+
+        if (g_should_forced_shutdown) {
+          std::cout << "CHILD: forceful shutdown signal received, exiting immediately..." << std::endl;
+          break;
+        }
+
+        if (shutdown_timestamp.time_since_epoch() == 0s) {
+          shutdown_timestamp = std::chrono::steady_clock::now();
+
+          std::cout << "CHILD: shutdown signal received, waiting for graceful shutdown..." << std::endl;
+
+          router->send_graceful_shutdown();
+          continue;
+        }
+
+        if (std::chrono::steady_clock::now() - shutdown_timestamp > 5s) {
+          std::cout << "CHILD: graceful shutdown timeout exceeded, exiting..." << std::endl;
+          router->send_forceful_shutdown();
+          break;
+        }
+      }
 
       std::cout << "CHILD: checking for message..." << std::endl;
 
@@ -148,10 +191,11 @@ child_process(torrent::shm::Router* router) {
 
   } catch (...) {
     router->test_close_control_fd();
-
     torrent::this_thread::poll()->cleanup_thread();
+
     throw;
   }
 
+  router->test_close_control_fd();
   torrent::this_thread::poll()->cleanup_thread();
 }

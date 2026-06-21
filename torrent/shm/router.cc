@@ -45,14 +45,9 @@ Router::test_close_control_fd() {
   m_control_fd->close();
 }
 
-void
-Router::register_control_closed_handler(std::function<void(int)>&& fn) {
-  m_control_fd->register_closed_handler(std::move(fn));
-}
-
-void
-Router::register_control_message_handler(std::function<void(std::string)>&& fn) {
-  m_control_fd->register_message_handler(std::move(fn));
+PublicControlFd
+Router::control_fd() {
+  return PublicControlFd(m_control_fd.get());
 }
 
 uint32_t

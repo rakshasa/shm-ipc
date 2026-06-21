@@ -22,6 +22,8 @@ std::unique_ptr<torrent::system::Poll> g_poll;
 torrent::shm::Router*  g_router{};
 
 std::atomic<bool>      g_should_shutdown{};
+std::atomic<bool>      g_should_graceful_shutdown{};
+std::atomic<bool>      g_should_forced_shutdown{};
 std::atomic<bool>      g_control_fd_closed{};
 
 void
@@ -55,6 +57,8 @@ do_signal_shutdown(int) {
 
   // TODO: Poke the main process thread.
   // TODO: Check if errno should be saved.
+
+  torrent::this_thread::poll()->do_interrupt();
 }
 
 void
@@ -68,6 +72,16 @@ handle_control_closed(torrent::shm::Router* router, const char* name, int error_
   g_control_fd_closed = true;
 
   router->test_close_control_fd();
+}
+
+void
+handle_control_shutdown(const char* name, bool graceful) {
+  std::cout << name << " process: received shutdown message: "
+            << (graceful ? "graceful" : "forceful") << std::endl;
+
+  g_should_shutdown          = true;
+  g_should_graceful_shutdown = graceful;
+  g_should_forced_shutdown   = !graceful;
 }
 
 void

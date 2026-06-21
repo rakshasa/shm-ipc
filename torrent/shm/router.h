@@ -24,6 +24,7 @@ namespace torrent::shm {
 // Add to common.h
 class Channel;
 class ControlFd;
+class PublicControlFd;
 class Segment;
 
 struct RouterHandler {
@@ -57,8 +58,7 @@ public:
   void                open_control_fd();
   void                test_close_control_fd();
 
-  void                register_control_closed_handler(std::function<void(int)>&& fn);
-  void                register_control_message_handler(std::function<void(std::string)>&& fn);
+  PublicControlFd     control_fd();
 
   // TODO: Replace uint32_t with struct with member functions.
   uint32_t            register_handler(data_func on_read, data_func on_error);
