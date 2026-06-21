@@ -150,6 +150,8 @@ main() {
   signal(SIGINT, do_panic);
   signal(SIGPIPE, SIG_IGN); // ignore SIGPIPE
 
+  std::cout << "sizeof(Channel): " << sizeof(torrent::shm::Channel) << std::endl;
+
   torrent::shm::RouterFactory factory;
 
   factory.initialize(1 * torrent::shm::Segment::page_size);

@@ -20,10 +20,14 @@ public:
     char        data[];
   };
 
-  static constexpr size_t header_size     = sizeof(header_type);
-  static constexpr size_t cache_line_size = std::hardware_destructive_interference_size;
+  static constexpr size_t   header_size     = sizeof(header_type);
+  static constexpr size_t   cache_line_size = std::hardware_destructive_interference_size;
+
+  static constexpr uint32_t flag_polling = 0x1;
 
   void                initialize(void* addr, size_t size);
+
+  auto&               consumer_state();
 
   // There will always be at least one (unusable) cache line free, and headers are not included.
   //
@@ -41,14 +45,21 @@ protected:
   Channel() = delete;
   ~Channel() = delete;
 
-  // These are offset by size of ChannelBase.
+  // Constant values, offset by sizeof(Channel).
+
   void*                 m_addr{};
   uint32_t              m_size{};
   uint32_t              m_write_threshold{};
 
+  // Mutable state:
+
   std::atomic<uint32_t> m_read_offset{};
   std::atomic<uint32_t> m_write_offset{};
+
+  std::atomic<uint32_t> m_consumer_state{};
 };
+
+inline auto& Channel::consumer_state() { return m_consumer_state; }
 
 } // namespace torrent::shm
 

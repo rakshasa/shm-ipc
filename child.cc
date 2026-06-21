@@ -134,7 +134,7 @@ child_process(torrent::shm::Router* router) {
         }
       }
 
-      std::cout << "CHILD: checking for message..." << std::endl;
+      // std::cout << "CHILD: checking for message..." << std::endl;
 
       if (std::chrono::steady_clock::now() - last_write > message_interval) {
         std::cout << "CHILD: writing message..." << std::endl;
@@ -168,9 +168,9 @@ child_process(torrent::shm::Router* router) {
       // Thread:
       //
 
-      // process_events();
+      router->process_reads_pre_polling();
 
-      router->process_reads();
+      // TODO: Add a sleep here to test flags for avoiding interrupts.
 
       auto timeout = message_interval - (std::chrono::steady_clock::now() - last_write);
 
@@ -186,7 +186,7 @@ child_process(torrent::shm::Router* router) {
 
       [[maybe_unused]] int event_count = torrent::this_thread::poll()->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
 
-      router->process_reads();
+      router->process_reads_post_polling();
 
       if (event_count > 0) {
         std::cout << "CHILD: poll returned with event count: " << event_count << std::endl;

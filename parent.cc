@@ -126,7 +126,7 @@ parent_process(torrent::shm::Router* router) {
         }
       }
 
-      std::cout << "PARENT: checking for message..." << std::endl;
+      // std::cout << "PARENT: checking for message..." << std::endl;
 
       if (std::chrono::steady_clock::now() - last_write > message_interval) {
         std::cout << "PARENT: writing message..." << std::endl;
@@ -150,12 +150,7 @@ parent_process(torrent::shm::Router* router) {
       // Thread:
       //
 
-      // process_events();
-
-      router->process_reads();
-
-      // TODO: Set flag
-      // TODO: router->process_reads();
+      router->process_reads_pre_polling();
 
       auto timeout = message_interval - (std::chrono::steady_clock::now() - last_write);
 
@@ -166,9 +161,7 @@ parent_process(torrent::shm::Router* router) {
 
       [[maybe_unused]] int event_count = torrent::this_thread::poll()->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
 
-      // TODO: Clear flag
-
-      router->process_reads();
+      router->process_reads_post_polling();
 
       if (event_count > 0) {
         std::cout << "PARENT: poll returned with event count: " << event_count << std::endl;
