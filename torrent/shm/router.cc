@@ -121,7 +121,11 @@ Router::write(uint32_t id, uint32_t size, void* data) {
   // if (size == 0)
   //   return true;
 
-  return m_write_channel->write(id, size, data);
+  if (!m_write_channel->write(id, size, data))
+    return false;
+
+  m_control_fd->send_interrupt();
+  return true;
 }
 
 void

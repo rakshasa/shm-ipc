@@ -29,6 +29,13 @@ ControlFd::close() {
 }
 
 void
+ControlFd::send_interrupt() {
+  char dummy = 0;
+
+  send_message_internal(&dummy, 0);
+}
+
+void
 ControlFd::send_shutdown_message(bool graceful) {
   static const std::string graceful_msg = "SHUTDOWN:GRACEFUL";
   static const std::string forceful_msg = "SHUTDOWN:FORCEFUL";
@@ -134,6 +141,11 @@ ControlFd::event_read() {
 
   char     buffer[max_message_size];
   uint16_t message_size = ntohs(size_network_order);
+
+  if (message_size == 0) {
+    m_slot_interrupt();
+    return;
+  }
 
   if (message_size > max_message_size) {
     m_slot_closed(EIO);

@@ -55,15 +55,22 @@ ParentHandler::create_new_channel(torrent::shm::Router* router) {
 // Parent process:
 //
 
+constexpr auto message_interval = 1s;
+
 void
 parent_process(torrent::shm::Router* router) {
   g_poll = torrent::system::Poll::create();
 
   register_signal_shutdown();
 
+  // interrupt_handler should only be called when an atomic flag in shm is set to indicate we're
+  // entering/already-in polling. Otherwise we do shm channel reads right after poll / before poll.
+
+  // router->control_fd().register_interrupt_handler([]()                  { });
+  router->control_fd().register_interrupt_handler([]()                  { std::cout << "PARENT: received interrupt on control fd." << std::endl; });
+  router->control_fd().register_message_handler([](auto msg)            { handle_control_message("PARENT:CONTROL", msg); });
   router->control_fd().register_closed_handler([router](int error_code) { handle_control_closed(router, "PARENT:CONTROL", error_code); });
   router->control_fd().register_shutdown_handler([](bool graceful)      { handle_control_shutdown("PARENT:CONTROL", graceful); });
-  router->control_fd().register_message_handler([](auto msg)            { handle_control_message("PARENT:CONTROL", msg); });
 
   std::cout << "PARENT: started: fd." << std::endl;
 
@@ -121,9 +128,7 @@ parent_process(torrent::shm::Router* router) {
 
       std::cout << "PARENT: checking for message..." << std::endl;
 
-      router->process_reads();
-
-      if (std::chrono::steady_clock::now() - last_write > 1s) {
+      if (std::chrono::steady_clock::now() - last_write > message_interval) {
         std::cout << "PARENT: writing message..." << std::endl;
 
         uint32_t id = (i % 2 == 0) ? handler_1->id : handler_2->id;
@@ -147,7 +152,12 @@ parent_process(torrent::shm::Router* router) {
 
       // process_events();
 
-      auto timeout = 1s - (std::chrono::steady_clock::now() - last_write);
+      router->process_reads();
+
+      // TODO: Set flag
+      // TODO: router->process_reads();
+
+      auto timeout = message_interval - (std::chrono::steady_clock::now() - last_write);
 
       if (timeout < std::chrono::steady_clock::duration::zero())
         timeout = std::chrono::steady_clock::duration::zero();
@@ -155,6 +165,10 @@ parent_process(torrent::shm::Router* router) {
       std::cout << "PARENT: polling for events with timeout: " << std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count() << "ms" << std::endl;
 
       [[maybe_unused]] int event_count = torrent::this_thread::poll()->do_poll(std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
+
+      // TODO: Clear flag
+
+      router->process_reads();
 
       if (event_count > 0) {
         std::cout << "PARENT: poll returned with event count: " << event_count << std::endl;
