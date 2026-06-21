@@ -62,11 +62,8 @@ parent_process(torrent::shm::Router* router) {
 
   register_signal_shutdown();
 
-  router->register_control_closed_handler([router](int error_code) {
-      handle_control_closed("PARENT:CONTROL", error_code);
-      router->test_close_control_fd();
-    });
-  router->register_control_message_handler([](auto msg)      { handle_control_message("PARENT:CONTROL", msg); });
+  router->register_control_closed_handler([router](int error_code) { handle_control_closed(router, "PARENT:CONTROL", error_code); });
+  router->register_control_message_handler([](auto msg)            { handle_control_message("PARENT:CONTROL", msg); });
 
   std::cout << "PARENT: started: fd." << std::endl;
 
@@ -92,6 +89,11 @@ parent_process(torrent::shm::Router* router) {
 
     for (int i = 0; ; ++i) {
       if (g_should_shutdown) {
+        if (g_control_fd_closed) {
+          std::cout << "PARENT: control fd closed, exiting immediately." << std::endl;
+          break;
+        }
+
         if (shutdown_timestamp.time_since_epoch() == 0s) {
           shutdown_timestamp = std::chrono::steady_clock::now();
 

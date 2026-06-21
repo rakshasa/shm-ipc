@@ -12,7 +12,8 @@ namespace torrent::shm {
 
 constexpr uint32_t
 align_to_cacheline(uint32_t size) {
-  uint32_t cache_line_size = std::hardware_destructive_interference_size;
+  uint32_t cache_line_size = LT_SMP_CACHE_BYTES;
+
   return (size + (cache_line_size - 1)) & ~(cache_line_size - 1);
 }
 
@@ -25,7 +26,7 @@ Channel::initialize(void* addr, size_t size) {
   m_size            = size - align_to_cacheline(sizeof(Channel));
   m_write_threshold = align_to_cacheline(m_size / 10) + 2 * cache_line_size;
 
-  m_read_offset = 0;
+  m_read_offset  = 0;
   m_write_offset = 0;
 }
 
@@ -37,8 +38,8 @@ Channel::available_write() {
 
   if (end_offset >= start_offset)
     return std::max(m_size - end_offset, start_offset);
-  else
-    return start_offset - end_offset;
+
+  return start_offset - end_offset;
 }
 
 bool

@@ -56,15 +56,14 @@ ChildHandler::on_read(void* data, uint32_t size) {
 
 void
 child_process(torrent::shm::Router* router) {
+  std::this_thread::sleep_for(20s);
+
   g_poll = torrent::system::Poll::create();
 
   register_signal_shutdown();
 
-  router->register_control_closed_handler([router](int error_code) {
-      handle_control_closed("CHILD:CONTROL", error_code);
-      router->test_close_control_fd();
-    });
-  router->register_control_message_handler([](auto msg) { handle_control_message("CHILD:CONTROL", msg); });
+  router->register_control_closed_handler([router](int error_code) { handle_control_closed(router, "CHILD:CONTROL", error_code); });
+  router->register_control_message_handler([](auto msg)            { handle_control_message("CHILD:CONTROL", msg); });
 
   std::cout << "CHILD: started: fd." << std::endl;
 
@@ -77,7 +76,6 @@ child_process(torrent::shm::Router* router) {
                            [child_handler](void* data, uint32_t size) { child_handler->on_error(data, size); });
 
   auto last_write = std::chrono::steady_clock::now();
-  auto m_poll     = torrent::system::Poll::create();
 
   router->open_control_fd();
 
@@ -86,24 +84,7 @@ child_process(torrent::shm::Router* router) {
     torrent::this_thread::poll()->init_thread();
 
     for (int i = 0; ; ++i) {
-      // if (g_should_shutdown) {
-      //   if (shutdown_timestamp == std::chrono::steady_clock::time_point{}) {
-      //     shutdown_timestamp = std::chrono::steady_clock::now();
-
-      //     std::cout << "CHILD:: shutdown signal received, waiting for graceful shutdown..." << std::endl;
-      //     continue;
-      //   }
-
-      //   if (std::chrono::steady_clock::now() - shutdown_timestamp > 5s) {
-      //     std::cout << "CHILD:: graceful shutdown timeout exceeded, exiting..." << std::endl;
-      //     break;
-      //   }
-
-      //   // If control_fd is closed, we can exit immediately.
-
-      // }
-
-      // if (
+      /////////////////////// ADD SHUTDOWN
 
 
       std::cout << "CHILD: checking for message..." << std::endl;

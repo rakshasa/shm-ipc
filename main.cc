@@ -58,7 +58,7 @@ do_signal_shutdown(int) {
 }
 
 void
-handle_control_closed(const char* name, int error_code) {
+handle_control_closed(torrent::shm::Router* router, const char* name, int error_code) {
   if (error_code == 0)
     std::cout << name << " process: control fd closed normally." << std::endl;
   else
@@ -66,6 +66,8 @@ handle_control_closed(const char* name, int error_code) {
 
   g_should_shutdown   = true;
   g_control_fd_closed = true;
+
+  router->test_close_control_fd();
 }
 
 void
