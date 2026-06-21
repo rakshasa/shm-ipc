@@ -53,11 +53,11 @@ class Poll;
 } // namespace torrent
 
 
-extern torrent::system::Poll* g_poll;
+extern std::unique_ptr<torrent::system::Poll> g_poll;
 
 namespace torrent::this_thread {
 
-inline auto* poll() { return g_poll; }
+inline auto* poll() { return g_poll.get(); }
 
 } // namespace torrent::this_thread
 

@@ -55,6 +55,8 @@ public:
   ~Router();
 
   void                open_control_fd();
+  void                test_close_control_fd();
+
   void                register_control_closed_handler(std::function<void(int)>&& fn);
   void                register_control_message_handler(std::function<void(std::string)>&& fn);
 

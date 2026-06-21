@@ -37,6 +37,15 @@ Router::open_control_fd() {
 }
 
 void
+Router::test_close_control_fd() {
+  if (!m_control_fd->is_polling())
+    return;
+
+  torrent::this_thread::poll()->remove_and_close(m_control_fd.get());
+  m_control_fd->close();
+}
+
+void
 Router::register_control_closed_handler(std::function<void(int)>&& fn) {
   m_control_fd->register_closed_handler(std::move(fn));
 }

@@ -13,10 +13,12 @@
 #include "torrent/shm/channel.h"
 #include "torrent/shm/factory.h"
 #include "torrent/shm/router.h"
+#include "torrent/system/poll.h"
 
 // handle segfault and other signals by closing fd
 
-torrent::system::Poll* g_poll{};
+std::unique_ptr<torrent::system::Poll> g_poll;
+
 torrent::shm::Router*  g_router{};
 
 std::atomic<bool>      g_should_shutdown{};
@@ -135,6 +137,8 @@ main() {
   torrent::shm::RouterFactory factory;
 
   factory.initialize(1 * torrent::shm::Segment::page_size);
+
+  // std::this_thread::sleep_for(20s);
 
   pid_t pid = fork();
 

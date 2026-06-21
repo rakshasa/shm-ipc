@@ -2,6 +2,8 @@
 
 #include <iostream>
 
+#include "torrent/common.h"
+
 #include "torrent/exceptions.h"
 #include "torrent/system/poll.h"
 
@@ -56,11 +58,14 @@ ParentHandler::create_new_channel(torrent::shm::Router* router) {
 
 void
 parent_process(torrent::shm::Router* router) {
-  auto g_poll = torrent::system::Poll::create();
+  g_poll = torrent::system::Poll::create();
 
   register_signal_shutdown();
 
-  router->register_control_closed_handler([](int error_code) { handle_control_closed("PARENT:CONTROL", error_code); });
+  router->register_control_closed_handler([router](int error_code) {
+      handle_control_closed("PARENT:CONTROL", error_code);
+      router->test_close_control_fd();
+    });
   router->register_control_message_handler([](auto msg)      { handle_control_message("PARENT:CONTROL", msg); });
 
   std::cout << "PARENT: started: fd." << std::endl;

@@ -13,9 +13,8 @@ namespace torrent::system {
 class Poll;
 }
 
-extern std::atomic<bool>      g_should_shutdown;
-extern std::atomic<bool>      g_control_fd_closed;
-extern torrent::system::Poll* g_poll;
+extern std::atomic<bool> g_should_shutdown;
+extern std::atomic<bool> g_control_fd_closed;
 
 void parent_process(torrent::shm::Router* router);
 void child_process(torrent::shm::Router* router);

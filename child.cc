@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <iostream>
 
+#include "torrent/common.h"
+
 #include "torrent/exceptions.h"
 #include "torrent/system/poll.h"
 #include "torrent/shm/segment.h"
@@ -54,12 +56,15 @@ ChildHandler::on_read(void* data, uint32_t size) {
 
 void
 child_process(torrent::shm::Router* router) {
-  auto g_poll = torrent::system::Poll::create();
+  g_poll = torrent::system::Poll::create();
 
   register_signal_shutdown();
 
-  router->register_control_closed_handler([](int error_code) { handle_control_closed("CHILD:CONTROL", error_code); });
-  router->register_control_message_handler([](auto msg)      { handle_control_message("CHILD:CONTROL", msg); });
+  router->register_control_closed_handler([router](int error_code) {
+      handle_control_closed("CHILD:CONTROL", error_code);
+      router->test_close_control_fd();
+    });
+  router->register_control_message_handler([](auto msg) { handle_control_message("CHILD:CONTROL", msg); });
 
   std::cout << "CHILD: started: fd." << std::endl;
 
@@ -160,7 +165,9 @@ child_process(torrent::shm::Router* router) {
       }
     }
 
-  } catch (const torrent::internal_error& e) {
+  } catch (...) {
+    router->test_close_control_fd();
+
     torrent::this_thread::poll()->cleanup_thread();
     throw;
   }
