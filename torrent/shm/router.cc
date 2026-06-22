@@ -12,6 +12,7 @@
 #include "torrent/shm/channel.h"
 #include "torrent/shm/control_fd.h"
 #include "torrent/shm/segment.h"
+#include "torrent/system/poll.h"
 
 namespace torrent::shm {
 
@@ -29,13 +30,24 @@ Router::Router(int fd, std::unique_ptr<Segment> read_segment, std::unique_ptr<Se
 Router::~Router() = default;
 
 void
-Router::register_control_closed_handler(std::function<void(int)>&& fn) {
-  m_control_fd->register_closed_handler(std::move(fn));
+Router::open_control_fd() {
+  torrent::this_thread::poll()->open(m_control_fd.get());
+  torrent::this_thread::poll()->insert_read(m_control_fd.get());
+  torrent::this_thread::poll()->insert_error(m_control_fd.get());
 }
 
 void
-Router::register_control_message_handler(std::function<void(std::string)>&& fn) {
-  m_control_fd->register_message_handler(std::move(fn));
+Router::test_close_control_fd() {
+  if (!m_control_fd->is_polling())
+    return;
+
+  torrent::this_thread::poll()->remove_and_close(m_control_fd.get());
+  m_control_fd->close();
+}
+
+PublicControlFd
+Router::control_fd() {
+  return PublicControlFd(m_control_fd.get());
 }
 
 uint32_t
@@ -109,7 +121,59 @@ Router::write(uint32_t id, uint32_t size, void* data) {
   // if (size == 0)
   //   return true;
 
-  return m_write_channel->write(id, size, data);
+  if (!m_write_channel->write(id, size, data))
+    return false;
+
+  if (m_write_channel->consumer_state().load(std::memory_order_acquire) & Channel::flag_polling)
+    m_control_fd->send_interrupt();
+
+  return true;
+}
+
+void
+Router::send_graceful_shutdown() {
+  m_control_fd->send_graceful_shutdown();
+}
+
+void
+Router::send_forceful_shutdown() {
+  m_control_fd->send_forceful_shutdown();
+}
+
+void
+Router::send_fatal_error(const char* msg, uint32_t size) {
+  // if (m_fd == -1)
+  //   throw torrent::internal_error("Router::send_fatal_error(): no file descriptor to send error message on");
+
+  // // Clear non-block to ensure the error message is sent.
+  // // if (::fcntl(m_fd, F_SETFL, 0) == -1)
+  // //   throw internal_error("RouterFactory::initialize(): fcntl() failed: " + std::string(strerror(errno)));
+
+  // if (::send(m_fd, msg, size, 0) == -1)
+  //   throw torrent::internal_error("Router::send_fatal_error(): failed to send error message");
+
+  // ::close(m_fd);
+  // m_fd = -1;
+
+  m_control_fd->send_fatal_error(msg, size);
+
+  torrent::this_thread::poll()->remove_and_close(m_control_fd.get());
+  m_control_fd->close();
+}
+
+// TODO: This should be a static function that takes a vector of routers to process.
+
+void
+Router::process_reads_pre_polling() {
+  process_reads();
+  m_read_channel->consumer_state().store(Channel::flag_polling, std::memory_order_release);
+  process_reads();
+}
+
+void
+Router::process_reads_post_polling() {
+  m_read_channel->consumer_state().store(0, std::memory_order_release);
+  process_reads();
 }
 
 void
@@ -166,30 +230,6 @@ Router::process_reads() {
   //
   // The process_reads() function can then send these special messages after reading normal
   // messages, and do reads while the buffer is insufficient to send them.
-}
-
-void
-Router::send_shutdown_message() {
-  m_control_fd->send_shutdown_message();
-}
-
-void
-Router::send_fatal_error(const char* msg, uint32_t size) {
-  // if (m_fd == -1)
-  //   throw torrent::internal_error("Router::send_fatal_error(): no file descriptor to send error message on");
-
-  // // Clear non-block to ensure the error message is sent.
-  // // if (::fcntl(m_fd, F_SETFL, 0) == -1)
-  // //   throw internal_error("RouterFactory::initialize(): fcntl() failed: " + std::string(strerror(errno)));
-
-  // if (::send(m_fd, msg, size, 0) == -1)
-  //   throw torrent::internal_error("Router::send_fatal_error(): failed to send error message");
-
-  // ::close(m_fd);
-  // m_fd = -1;
-
-  m_control_fd->send_fatal_error(msg, size);
-  m_control_fd->close();
 }
 
 } // namespace torrent::shm

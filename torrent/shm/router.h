@@ -24,6 +24,7 @@ namespace torrent::shm {
 // Add to common.h
 class Channel;
 class ControlFd;
+class PublicControlFd;
 class Segment;
 
 struct RouterHandler {
@@ -54,8 +55,10 @@ public:
   Router(int fd, std::unique_ptr<Segment> read_segment, std::unique_ptr<Segment> write_segment);
   ~Router();
 
-  void                register_control_closed_handler(std::function<void(int)>&& fn);
-  void                register_control_message_handler(std::function<void(std::string)>&& fn);
+  void                open_control_fd();
+  void                test_close_control_fd();
+
+  PublicControlFd     control_fd();
 
   // TODO: Replace uint32_t with struct with member functions.
   uint32_t            register_handler(data_func on_read, data_func on_error);
@@ -68,14 +71,22 @@ public:
 
   bool                write(uint32_t id, uint32_t size, void* data);
 
-  void                process_reads();
+  void                send_graceful_shutdown();
+  void                send_forceful_shutdown();
 
-  void                send_shutdown_message();
   void                send_fatal_error(const std::string& msg);
   void                send_fatal_error(const char* msg, uint32_t size);
 
+  void                process_reads_pre_polling();
+  void                process_reads_post_polling();
+
 private:
+  void                process_reads();
+
   using handler_map = std::map<uint32_t, RouterHandler>;
+
+  // TODO: Add a flag to shm that indicates if the other side is in an event loop and will soon
+  // check the channel. This avoids unnessesary writes of wakeup messages.
 
   std::unique_ptr<ControlFd> m_control_fd;
 
@@ -89,7 +100,7 @@ private:
   handler_map         m_handlers;
 };
 
-// inline int  Router::file_descriptor() const                  { return m_fd; }
+// inline int  Router::file_descriptor() const               { return m_fd; }
 inline void Router::send_fatal_error(const std::string& msg) { send_fatal_error(msg.c_str(), msg.size()); }
 
 } // namespace torrent::shm

@@ -7,18 +7,24 @@
 #include <thread>
 #include <unistd.h>
 
-#include "common.h"
+#include "shm-common.h"
 
 #include "torrent/shm/segment.h"
 #include "torrent/shm/channel.h"
 #include "torrent/shm/factory.h"
 #include "torrent/shm/router.h"
+#include "torrent/system/poll.h"
 
 // handle segfault and other signals by closing fd
-torrent::shm::Router* g_router{};
 
-std::atomic<bool>     g_should_shutdown{};
-std::atomic<bool>     g_control_fd_closed{};
+std::unique_ptr<torrent::system::Poll> g_poll;
+
+torrent::shm::Router*  g_router{};
+
+std::atomic<bool>      g_should_shutdown{};
+std::atomic<bool>      g_should_graceful_shutdown{};
+std::atomic<bool>      g_should_forced_shutdown{};
+std::atomic<bool>      g_control_fd_closed{};
 
 void
 do_panic(int signum) {
@@ -51,10 +57,12 @@ do_signal_shutdown(int) {
 
   // TODO: Poke the main process thread.
   // TODO: Check if errno should be saved.
+
+  torrent::this_thread::poll()->do_interrupt();
 }
 
 void
-handle_control_closed(const char* name, int error_code) {
+handle_control_closed(torrent::shm::Router* router, const char* name, int error_code) {
   if (error_code == 0)
     std::cout << name << " process: control fd closed normally." << std::endl;
   else
@@ -62,6 +70,18 @@ handle_control_closed(const char* name, int error_code) {
 
   g_should_shutdown   = true;
   g_control_fd_closed = true;
+
+  router->test_close_control_fd();
+}
+
+void
+handle_control_shutdown(const char* name, bool graceful) {
+  std::cout << name << " process: received shutdown message: "
+            << (graceful ? "graceful" : "forceful") << std::endl;
+
+  g_should_shutdown          = true;
+  g_should_graceful_shutdown = graceful;
+  g_should_forced_shutdown   = !graceful;
 }
 
 void
@@ -130,9 +150,13 @@ main() {
   signal(SIGINT, do_panic);
   signal(SIGPIPE, SIG_IGN); // ignore SIGPIPE
 
+  std::cout << "sizeof(Channel): " << sizeof(torrent::shm::Channel) << std::endl;
+
   torrent::shm::RouterFactory factory;
 
   factory.initialize(1 * torrent::shm::Segment::page_size);
+
+  // std::this_thread::sleep_for(20s);
 
   pid_t pid = fork();
 
