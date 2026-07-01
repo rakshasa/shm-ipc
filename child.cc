@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <signal.h>
 
 #include "torrent/common.h"
 
@@ -83,7 +84,8 @@ child_process(torrent::shm::Router* router) {
 
   std::chrono::steady_clock::time_point shutdown_timestamp{};
 
-  auto last_write = std::chrono::steady_clock::now();
+  [[maybe_unused]] auto start_time = std::chrono::steady_clock::now();
+  auto                  last_write = std::chrono::steady_clock::now();
 
   router->open_control_fd();
 
@@ -163,6 +165,12 @@ child_process(torrent::shm::Router* router) {
           }
         }
       }
+
+      // // send SIGSEGV to self after 30 seconds to test that parent detects it and exits.
+      // if (std::chrono::steady_clock::now() - start_time > 30s) {
+      //   std::cout << "CHILD: sending SIGSEGV to self to test parent shutdown on child crash..." << std::endl;
+      //   raise(SIGSEGV);
+      // }
 
       //
       // Thread:
