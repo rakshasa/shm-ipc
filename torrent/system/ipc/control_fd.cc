@@ -1,6 +1,6 @@
 #include "config.h"
 
-#include "torrent/shm/control_fd.h"
+#include "torrent/system/ipc/control_fd.h"
 
 #include <fcntl.h>
 #include <iostream>
@@ -9,8 +9,11 @@
 #include <sys/socket.h>
 
 #include "torrent/exceptions.h"
+#include "torrent/net/fd.h"
+#include "torrent/system/poll.h"
+#include "torrent/system/types.h"
 
-namespace torrent::shm {
+namespace torrent::system::ipc {
 
 void
 ControlFd::open(int fd) {
@@ -22,18 +25,62 @@ ControlFd::close() {
   if (!is_open())
     return;
 
-  if (::close(file_descriptor()) == -1)
-    throw internal_error("ControlFd::close() error closing control fd: " + std::string(std::strerror(errno)));
+  if (is_polling())
+    torrent::this_thread::poll()->remove_and_close(this);
 
-  set_file_descriptor(-1);
+  fd_close(file_descriptor());
+  reset_file_descriptor();
+}
+
+bool
+ControlFd::check_is_alive(int fd) {
+  char dummy;
+  auto bytes = ::recv(fd, &dummy, 1, MSG_PEEK | MSG_DONTWAIT);
+
+  if (bytes == 0)
+    return false;
+
+  if (bytes == -1) {
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+      return true;
+
+    if (errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE)
+      return false;
+
+    // throw internal_error("ControlFd::check_is_alive() recv() failed: " + errno_enum_str(errno));
+    return false;
+  }
+
+  return true;
 }
 
 void
-ControlFd::send_interrupt() {
-  char dummy = 0;
+ControlFd::wait_is_alive(int fd) {
+  while (true) {
+    char dummy;
+    auto bytes = ::recv(fd, &dummy, 1, MSG_PEEK);
 
-  send_message_internal(&dummy, 0);
+    if (bytes == 0)
+      return;
+
+    if (bytes == -1) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+        continue;
+
+      if (errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE)
+        return;
+
+      throw internal_error("ControlFd::wait_is_alive() recv() failed: " + std::string(std::strerror(errno)));
+    }
+  }
 }
+
+// void
+// ControlFd::send_interrupt() {
+//   char dummy = 0;
+
+//   send_message_internal(&dummy, 0);
+// }
 
 void
 ControlFd::send_shutdown_message(bool graceful) {
@@ -114,7 +161,7 @@ ControlFd::event_read() {
 #ifdef __linux__
             // On Linux, the socket is non-blocking. To prevent a 100% CPU hot-loop while waiting
             // for the payload, throttle with a tiny sleep.
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            std::this_thread::sleep_for(10ms);
             continue;
 #else
             // On macOS/BSD, the socket is blocking. If EAGAIN happens mid-packet, it means the
@@ -142,10 +189,10 @@ ControlFd::event_read() {
   char     buffer[max_message_size];
   uint16_t message_size = ntohs(size_network_order);
 
-  if (message_size == 0) {
-    m_slot_interrupt();
-    return;
-  }
+  // if (message_size == 0) {
+  //   m_slot_interrupt();
+  //   return;
+  // }
 
   if (message_size > max_message_size) {
     m_slot_closed(EIO);
@@ -178,4 +225,4 @@ ControlFd::event_error() {
   throw internal_error("ControlFd::event_error() error on control fd: " + std::string(std::strerror(errno)));
 }
 
-} // namespace torrent::shm
+} // namespace torrent::system::ipc

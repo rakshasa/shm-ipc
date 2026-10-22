@@ -1,7 +1,6 @@
-#ifndef LIBTORRENT_TORRENT_SHM_CHANNEL_H
-#define LIBTORRENT_TORRENT_SHM_CHANNEL_H
+#ifndef LIBTORRENT_TORRENT_SYSTEM_IPC_CHANNEL_H
+#define LIBTORRENT_TORRENT_SYSTEM_IPC_CHANNEL_H
 
-#include <atomic>
 #include <torrent/common.h>
 
 // Channels are intended for one writer, one reader, of data blocks less than ~1/10th the channel
@@ -10,7 +9,7 @@
 // Querying available write space selects the largest of the contiguous free spaces, so when
 // wrapping the free space may be smaller than total free space.
 
-namespace torrent::shm {
+namespace torrent::system::ipc {
 
 class LIBTORRENT_EXPORT Channel {
 public:
@@ -21,7 +20,7 @@ public:
   };
 
   static constexpr size_t   header_size     = sizeof(header_type);
-  static constexpr size_t   cache_line_size = std::hardware_destructive_interference_size;
+  static constexpr size_t   cache_line_size = LT_SMP_CACHE_BYTES;
 
   static constexpr uint32_t flag_polling = 0x1;
 
@@ -33,6 +32,7 @@ public:
   //
   // Only use this for a rough estimate of available space.
   uint32_t            available_write();
+  uint32_t            available_read();
 
   bool                can_write(uint32_t size);
 
@@ -41,9 +41,13 @@ public:
   header_type*        read_header();
   void                consume_header(header_type* header);
 
-protected:
+private:
   Channel() = delete;
   ~Channel() = delete;
+
+  inline header_type*   header_at_offset(uint32_t offset);
+
+  bool                  verify_read_header(header_type* header);
 
   // Constant values, offset by sizeof(Channel).
 
@@ -61,6 +65,6 @@ protected:
 
 inline auto& Channel::consumer_state() { return m_consumer_state; }
 
-} // namespace torrent::shm
+} // namespace torrent::system::ipc
 
-#endif // LIBTORRENT_TORRENT_SHM_CHANNEL_H
+#endif

@@ -9,22 +9,34 @@
 
 #include "shm-common.h"
 
-#include "torrent/shm/segment.h"
-#include "torrent/shm/channel.h"
-#include "torrent/shm/factory.h"
-#include "torrent/shm/router.h"
+#include "torrent/common.h"
+#include "torrent/system/ipc/segment.h"
+#include "torrent/system/ipc/channel.h"
+#include "torrent/system/ipc/factory.h"
+#include "torrent/system/ipc/router.h"
 #include "torrent/system/poll.h"
 
 // handle segfault and other signals by closing fd
 
 std::unique_ptr<torrent::system::Poll> g_poll;
 
-torrent::shm::Router*  g_router{};
+torrent::system::ipc::Router*  g_router{};
 
 std::atomic<bool>      g_should_shutdown{};
 std::atomic<bool>      g_should_graceful_shutdown{};
 std::atomic<bool>      g_should_forced_shutdown{};
 std::atomic<bool>      g_control_fd_closed{};
+
+namespace torrent::this_thread {
+
+std::string               thread_name_str() { return thread_name(); }
+
+const char*
+thread_name() {
+  return "foo-thread";
+}
+
+} // namespace torrent::this_thread
 
 void
 do_panic(int signum) {
@@ -62,7 +74,7 @@ do_signal_shutdown(int) {
 }
 
 void
-handle_control_closed(torrent::shm::Router* router, const char* name, int error_code) {
+handle_control_closed(torrent::system::ipc::Router* router, const char* name, int error_code) {
   if (error_code == 0)
     std::cout << name << " process: control fd closed normally." << std::endl;
   else
@@ -71,7 +83,7 @@ handle_control_closed(torrent::shm::Router* router, const char* name, int error_
   g_should_shutdown   = true;
   g_control_fd_closed = true;
 
-  router->test_close_control_fd();
+  router->close_fds();
 }
 
 void
@@ -150,11 +162,11 @@ main() {
   signal(SIGINT, do_panic);
   signal(SIGPIPE, SIG_IGN); // ignore SIGPIPE
 
-  std::cout << "sizeof(Channel): " << sizeof(torrent::shm::Channel) << std::endl;
+  std::cout << "sizeof(Channel): " << sizeof(torrent::system::ipc::Channel) << std::endl;
 
-  torrent::shm::RouterFactory factory;
+  torrent::system::ipc::RouterFactory factory;
 
-  factory.initialize(1 * torrent::shm::Segment::page_size);
+  factory.initialize(1 * torrent::system::ipc::Segment::page_size);
 
   // std::this_thread::sleep_for(20s);
 

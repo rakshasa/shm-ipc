@@ -28,6 +28,10 @@ public:
   // from open(...) is called to close(...) returns. The implementor
   // of this class should not open nor close the file descriptor.
   void                open(Event* event);
+  void                open_and_insert_read(Event* event);
+  void                open_and_insert_read_write(Event* event);
+  void                open_and_insert_write(Event* event);
+
   void                close(Event* event);
 
   // Functions for checking whetever the Event is listening to r/w/e?

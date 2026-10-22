@@ -7,10 +7,10 @@
 
 #include "torrent/exceptions.h"
 #include "torrent/system/poll.h"
-#include "torrent/shm/control_fd.h"
-#include "torrent/shm/channel.h"
-#include "torrent/shm/router.h"
-#include "torrent/shm/segment.h"
+#include "torrent/system/ipc/control_fd.h"
+#include "torrent/system/ipc/channel.h"
+#include "torrent/system/ipc/router.h"
+#include "torrent/system/ipc/segment.h"
 
 struct ParentHandler {
   void on_read(void* data, uint32_t size) {
@@ -27,13 +27,13 @@ struct ParentHandler {
     throw std::runtime_error("PARENT:HANDLER: throwing error as test");
   }
 
-  TestHandler* create_new_channel(torrent::shm::Router* router);
+  TestHandler* create_new_channel(torrent::system::ipc::Router* router);
 
   uint32_t id;
 };
 
 TestHandler*
-ParentHandler::create_new_channel(torrent::shm::Router* router) {
+ParentHandler::create_new_channel(torrent::system::ipc::Router* router) {
   auto handler = new TestHandler{};
 
   handler->id = router->register_handler([handler](void* data, uint32_t size) { handler->on_read(data, size); },
@@ -59,7 +59,7 @@ ParentHandler::create_new_channel(torrent::shm::Router* router) {
 constexpr auto message_interval = 1s;
 
 void
-parent_process(torrent::shm::Router* router) {
+parent_process(torrent::system::ipc::Router* router) {
   g_poll = torrent::system::Poll::create();
 
   register_signal_shutdown();
@@ -68,7 +68,7 @@ parent_process(torrent::shm::Router* router) {
   // entering/already-in polling. Otherwise we do shm channel reads right after poll / before poll.
 
   // router->control_fd().register_interrupt_handler([]()                  { });
-  router->control_fd().register_interrupt_handler([]()                  { std::cout << "PARENT: received interrupt on control fd." << std::endl; });
+  // router->control_fd().register_interrupt_handler([]()                  { std::cout << "PARENT: received interrupt on control fd." << std::endl; });
   router->control_fd().register_message_handler([](auto msg)            { handle_control_message("PARENT:CONTROL", msg); });
   router->control_fd().register_closed_handler([router](int error_code) { handle_control_closed(router, "PARENT:CONTROL", error_code); });
   router->control_fd().register_shutdown_handler([](bool graceful)      { handle_control_shutdown("PARENT:CONTROL", graceful); });
@@ -90,7 +90,7 @@ parent_process(torrent::shm::Router* router) {
   [[maybe_unused]] auto start_time = std::chrono::steady_clock::now();
   auto                  last_write = std::chrono::steady_clock::now();
 
-  router->open_control_fd();
+  router->open_fds();
 
   try {
 
@@ -179,12 +179,12 @@ parent_process(torrent::shm::Router* router) {
     }
 
   } catch (...) {
-    router->test_close_control_fd();
+    router->close_fds();
     torrent::this_thread::poll()->cleanup_thread();
 
     throw;
   }
 
-  router->test_close_control_fd();
+  router->close_fds();
   torrent::this_thread::poll()->cleanup_thread();
 }

@@ -8,10 +8,10 @@
 
 #include "torrent/exceptions.h"
 #include "torrent/system/poll.h"
-#include "torrent/shm/channel.h"
-#include "torrent/shm/control_fd.h"
-#include "torrent/shm/router.h"
-#include "torrent/shm/segment.h"
+#include "torrent/system/ipc/channel.h"
+#include "torrent/system/ipc/control_fd.h"
+#include "torrent/system/ipc/router.h"
+#include "torrent/system/ipc/segment.h"
 
 
 struct ChildHandler {
@@ -22,7 +22,7 @@ struct ChildHandler {
     throw std::runtime_error("CHILD:HANDLER throwing error as test");
   }
 
-  torrent::shm::Router*     router;
+  torrent::system::ipc::Router*     router;
   uint32_t                  id;
   std::vector<TestHandler*> channels;
 };
@@ -59,7 +59,7 @@ ChildHandler::on_read(void* data, uint32_t size) {
 constexpr auto message_interval = 5s;
 
 void
-child_process(torrent::shm::Router* router) {
+child_process(torrent::system::ipc::Router* router) {
   // std::this_thread::sleep_for(20s);
 
   g_poll = torrent::system::Poll::create();
@@ -67,7 +67,7 @@ child_process(torrent::shm::Router* router) {
   register_signal_shutdown();
 
   // router->control_fd().register_interrupt_handler([]()                  { });
-  router->control_fd().register_interrupt_handler([]()                  { std::cout << "CHILD: received control interrupt" << std::endl; });
+  //router->control_fd().register_interrupt_handler([]()                  { std::cout << "CHILD: received control interrupt" << std::endl; });
   router->control_fd().register_message_handler([](auto msg)            { handle_control_message("CHILD:CONTROL", msg); });
   router->control_fd().register_closed_handler([router](int error_code) { handle_control_closed(router, "CHILD:CONTROL", error_code); });
   router->control_fd().register_shutdown_handler([](bool graceful)      { handle_control_shutdown("CHILD:CONTROL", graceful); });
@@ -87,7 +87,7 @@ child_process(torrent::shm::Router* router) {
   [[maybe_unused]] auto start_time = std::chrono::steady_clock::now();
   auto                  last_write = std::chrono::steady_clock::now();
 
-  router->open_control_fd();
+  router->open_fds();
 
   try {
 
@@ -204,12 +204,12 @@ child_process(torrent::shm::Router* router) {
     }
 
   } catch (...) {
-    router->test_close_control_fd();
+    router->close_fds();
     torrent::this_thread::poll()->cleanup_thread();
 
     throw;
   }
 
-  router->test_close_control_fd();
+  router->close_fds();
   torrent::this_thread::poll()->cleanup_thread();
 }

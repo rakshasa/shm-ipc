@@ -10,8 +10,8 @@
 #include <unistd.h>
 #include <sys/event.h>
 
-#include "torrent/event.h"
 #include "torrent/exceptions.h"
+#include "torrent/system/event.h"
 #include "torrent/system/thread.h"
 
 // TODO: Change to LOG_CONNECTION_POLL
@@ -59,7 +59,7 @@ public:
   void                set_event_mask(Event* event, uint32_t mask);
 
   void                flush();
-  void                modify(torrent::Event* event, unsigned short op, short mask);
+  void                modify(Event* event, unsigned short op, short mask);
 
   inline void         create_user_event();
   inline void         poke_user_event();
@@ -329,6 +329,25 @@ Poll::open(Event* event) {
   event->m_poll_event = std::make_shared<PollEvent>(event);
 
   m_internal->m_table[event->file_descriptor()] = event->m_poll_event;
+}
+
+void
+Poll::open_and_insert_read(Event* event) {
+  open(event);
+  insert_read(event);
+}
+
+void
+Poll::open_and_insert_read_write(Event* event) {
+  open(event);
+  insert_read(event);
+  insert_write(event);
+}
+
+void
+Poll::open_and_insert_write(Event* event) {
+  open(event);
+  insert_write(event);
 }
 
 void

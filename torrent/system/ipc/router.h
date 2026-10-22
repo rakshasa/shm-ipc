@@ -1,9 +1,9 @@
-#ifndef LIBTORRENT_TORRENT_SHM_ROUTER_H
-#define LIBTORRENT_TORRENT_SHM_ROUTER_H
+#ifndef LIBTORRENT_TORRENT_SYSTEM_IPC_ROUTER_H
+#define LIBTORRENT_TORRENT_SYSTEM_IPC_ROUTER_H
 
 #include <map>
 #include <memory>
-#include <torrent/common.h>
+#include <torrent/system/common.h>
 
 // Uses read and write shm::Channel for inter-process communication.
 //
@@ -19,13 +19,13 @@
 //
 // Router should have one channel producer, and one consumer, to avoid id conflicts.
 
-namespace torrent::shm {
+namespace torrent::system::ipc {
 
-// Add to common.h
 class Channel;
 class ControlFd;
 class PublicControlFd;
 class Segment;
+class WakeupFd;
 
 struct RouterHandler {
   using data_func = std::function<void(void* data, uint32_t size)>;
@@ -52,18 +52,29 @@ public:
   constexpr static uint32_t flag_close = 0x80000000;
   constexpr static uint32_t flag_mask  = 0xF0000000;
 
-  Router(int fd, std::unique_ptr<Segment> read_segment, std::unique_ptr<Segment> write_segment);
+  struct create_args {
+    bool                     is_parent{};
+    int                      control_fd{};
+    int                      keepalive_fd{};
+    std::pair<int, int>      wakeup_fds{};
+    std::unique_ptr<Segment> read_segment;
+    std::unique_ptr<Segment> write_segment;
+  };
+
+
+  Router(create_args args);
   ~Router();
 
-  void                open_control_fd();
-  void                test_close_control_fd();
+  void                open_fds();
+  void                close_fds();
 
   PublicControlFd     control_fd();
+  int                 keepalive_fd() const;
 
   // TODO: Replace uint32_t with struct with member functions.
   uint32_t            register_handler(data_func on_read, data_func on_error);
-  void                register_handler(int id, data_func on_read, data_func on_error);
-  bool                try_register_handler(int id, data_func on_read, data_func on_error);
+  void                register_handler(uint32_t id, data_func on_read, data_func on_error);
+  bool                try_register_handler(uint32_t id, data_func on_read, data_func on_error);
 
   void                close(uint32_t id);
 
@@ -81,6 +92,9 @@ public:
   void                process_reads_post_polling();
 
 private:
+  Router(const Router&) = delete;
+  Router& operator=(const Router&) = delete;
+
   void                process_reads();
 
   using handler_map = std::map<uint32_t, RouterHandler>;
@@ -88,7 +102,11 @@ private:
   // TODO: Add a flag to shm that indicates if the other side is in an event loop and will soon
   // check the channel. This avoids unnessesary writes of wakeup messages.
 
+  // TODO: Add event_fd/kevent and do control_fd in a separate thread to avoid child deadlocks.
+
   std::unique_ptr<ControlFd> m_control_fd;
+  std::unique_ptr<WakeupFd>  m_wakeup_fd{};
+  int                        m_keepalive_fd{};
 
   std::unique_ptr<Segment>   m_read_segment;
   std::unique_ptr<Segment>   m_write_segment;
@@ -100,9 +118,9 @@ private:
   handler_map         m_handlers;
 };
 
-// inline int  Router::file_descriptor() const               { return m_fd; }
+inline int  Router::keepalive_fd() const                     { return m_keepalive_fd; }
 inline void Router::send_fatal_error(const std::string& msg) { send_fatal_error(msg.c_str(), msg.size()); }
 
-} // namespace torrent::shm
+} // namespace torrent::system::ipc
 
-#endif // LIBTORRENT_TORRENT_SHM_CHANNEL_H
+#endif

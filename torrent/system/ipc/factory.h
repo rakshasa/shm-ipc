@@ -1,12 +1,14 @@
-#ifndef LIBTORRENT_TORRENT_SHM_FACTORY_H
-#define LIBTORRENT_TORRENT_SHM_FACTORY_H
+#ifndef LIBTORRENT_TORRENT_SYSTEM_IPC_FACTORY_H
+#define LIBTORRENT_TORRENT_SYSTEM_IPC_FACTORY_H
 
 #include <memory>
 #include <torrent/common.h>
+#include <torrent/system/ipc/router.h>
+#include <torrent/system/ipc/segment.h>
 
 // Holds the everything needed to create a Router.
 
-namespace torrent::shm {
+namespace torrent::system::ipc {
 
 class Channel;
 class Router;
@@ -23,14 +25,14 @@ public:
   std::unique_ptr<Router> create_child_router();
 
 private:
-  int                      m_socket_1{};
-  int                      m_socket_2{};
+  std::pair<int, int>      m_control_fds{};
+  std::pair<int, int>      m_keepalive_fds{};
+  std::pair<int, int>      m_wakeup_fds{};
 
-  // TODO: Copy move these to router.
   std::unique_ptr<Segment> m_segment_1;
   std::unique_ptr<Segment> m_segment_2;
 };
 
-} // namespace torrent::shm
+} // namespace torrent::system::ipc
 
-#endif // LIBTORRENT_TORRENT_SHM_FACTORY_H
+#endif

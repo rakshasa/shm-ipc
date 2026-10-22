@@ -1,6 +1,6 @@
 #include "config.h"
 
-#include "torrent/shm/router.h"
+#include "torrent/system/ipc/router.h"
 
 #include <cassert>
 #include <unistd.h>
@@ -9,19 +9,28 @@
 #include <fcntl.h>
 
 #include "torrent/exceptions.h"
-#include "torrent/shm/channel.h"
-#include "torrent/shm/control_fd.h"
-#include "torrent/shm/segment.h"
+#include "torrent/system/ipc/channel.h"
+#include "torrent/system/ipc/control_fd.h"
+#include "torrent/system/ipc/segment.h"
+#include "torrent/system/ipc/wakeup_fd.h"
 #include "torrent/system/poll.h"
 
-namespace torrent::shm {
+namespace torrent::system::ipc {
 
-Router::Router(int fd, std::unique_ptr<Segment> read_segment, std::unique_ptr<Segment> write_segment)
-  : m_read_segment(std::move(read_segment)),
-    m_write_segment(std::move(write_segment)) {
+// TODO: Add entry_fd and kqueue support.
+// TODO: Add watchdog.
+
+Router::Router(create_args args)
+  : m_read_segment(std::move(args.read_segment)),
+    m_write_segment(std::move(args.write_segment)) {
 
   m_control_fd = std::make_unique<ControlFd>();
-  m_control_fd->open(fd);
+  m_control_fd->open(args.control_fd);
+
+  m_wakeup_fd  = std::make_unique<WakeupFd>();
+  m_wakeup_fd->open(args.wakeup_fds, args.is_parent);
+
+  m_keepalive_fd = args.keepalive_fd;
 
   m_read_channel  = static_cast<Channel*>(m_read_segment->address());
   m_write_channel = static_cast<Channel*>(m_write_segment->address());
@@ -29,20 +38,20 @@ Router::Router(int fd, std::unique_ptr<Segment> read_segment, std::unique_ptr<Se
 
 Router::~Router() = default;
 
+// TODO: Rename...
 void
-Router::open_control_fd() {
-  torrent::this_thread::poll()->open(m_control_fd.get());
-  torrent::this_thread::poll()->insert_read(m_control_fd.get());
-  torrent::this_thread::poll()->insert_error(m_control_fd.get());
+Router::open_fds() {
+  this_thread::poll()->open_and_insert_read(m_control_fd.get());
+
+  // runtime::socket_manager()->register_event_or_throw(this, runtime::category_internal, [this]() {
+  this_thread::poll()->open_and_insert_read(m_wakeup_fd.get());
+    // });
 }
 
 void
-Router::test_close_control_fd() {
-  if (!m_control_fd->is_polling())
-    return;
-
-  torrent::this_thread::poll()->remove_and_close(m_control_fd.get());
+Router::close_fds() {
   m_control_fd->close();
+  m_wakeup_fd->close();
 }
 
 PublicControlFd
@@ -66,13 +75,16 @@ Router::register_handler(data_func on_read, data_func on_error) {
 }
 
 void
-Router::register_handler(int id, data_func on_read, data_func on_error) {
+Router::register_handler(uint32_t id, data_func on_read, data_func on_error) {
   if (!try_register_handler(id, on_read, on_error))
     throw torrent::internal_error("Router::register_handler(): id already in use");
 }
 
 bool
-Router::try_register_handler(int id, data_func on_read, data_func on_error) {
+Router::try_register_handler(uint32_t id, data_func on_read, data_func on_error) {
+  if ((id & flag_mask) != 0)
+    throw torrent::internal_error("Router::try_register_handler(): id has reserved bits set");
+
   // TODO: Optimize to avoid double lookup.
   auto itr = m_handlers.find(id);
 
@@ -109,7 +121,7 @@ Router::close(uint32_t id) {
   itr->second.on_error = nullptr;
 
   if (!m_write_channel->write(id | Router::flag_close, 0, nullptr)) {
-    // TODO: Add to a pending close queue to retry later?
+    // TODO: Add to a pending close queue to retry later, for now just shut down everything.
     throw torrent::internal_error("Router::close(): failed to write close event to channel");
   }
 }
@@ -124,8 +136,18 @@ Router::write(uint32_t id, uint32_t size, void* data) {
   if (!m_write_channel->write(id, size, data))
     return false;
 
+  // TODO: This can falsely trigger, so we need to check if the last message we wrote was already
+  // consumed before interrupting.
+  //
+  // TODO: We would have to have a counter_id that both sides increment?
+
+
+  // TODO: !!! Verify flag_polling gets set before we re-check the channel.
+
+  // TODO: !!! We need to keep an add a interrupt flag too, so that if the consumer knows how to do polling correctly (with zero timeout)
+
   if (m_write_channel->consumer_state().load(std::memory_order_acquire) & Channel::flag_polling)
-    m_control_fd->send_interrupt();
+    m_wakeup_fd->send_interrupt();
 
   return true;
 }
@@ -232,4 +254,4 @@ Router::process_reads() {
   // messages, and do reads while the buffer is insufficient to send them.
 }
 
-} // namespace torrent::shm
+} // namespace torrent::system::ipc

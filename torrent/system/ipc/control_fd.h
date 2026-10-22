@@ -1,10 +1,10 @@
-#ifndef LIBTORRENT_TORRENT_SHM_CONTROL_FD_H
-#define LIBTORRENT_TORRENT_SHM_CONTROL_FD_H
+#ifndef LIBTORRENT_TORRENT_SYSTEM_IPC_CONTROL_FD_H
+#define LIBTORRENT_TORRENT_SYSTEM_IPC_CONTROL_FD_H
 
 #include <atomic>
-#include <torrent/event.h>
+#include <torrent/system/event.h>
 
-namespace torrent::shm {
+namespace torrent::system::ipc {
 
 class ControlFd;
 
@@ -12,7 +12,9 @@ class LIBTORRENT_EXPORT PublicControlFd {
 public:
   PublicControlFd(ControlFd* control_fd) : m_control_fd(control_fd) {}
 
-  void register_interrupt_handler(std::function<void()>&& fn);
+  int  file_descriptor() const;
+
+  // void register_interrupt_handler(std::function<void()>&& fn);
   void register_message_handler(std::function<void(std::string)>&& fn);
 
   void register_closed_handler(std::function<void(int)>&& fn);
@@ -34,11 +36,15 @@ public:
   void                open(int fd);
   void                close();
 
-  void                send_interrupt();
+  // void                send_interrupt();
 
   void                send_graceful_shutdown();
   void                send_forceful_shutdown();
   void                send_fatal_error(const char* msg, uint32_t size);
+
+  // TODO: Remove.
+  static bool         check_is_alive(int fd);
+  static void         wait_is_alive(int fd);
 
 private:
   friend class PublicControlFd;
@@ -50,20 +56,21 @@ private:
   void                event_write() override;
   void                event_error() override;
 
-  std::function<void()>            m_slot_interrupt;
+  // std::function<void()>            m_slot_interrupt;
   std::function<void(std::string)> m_slot_message;
   std::function<void(int)>         m_slot_closed;
   std::function<void(bool)>        m_slot_shutdown;
 };
 
-inline void PublicControlFd::register_interrupt_handler(std::function<void()>&& fn)          { m_control_fd->m_slot_interrupt = std::move(fn); }
-inline void PublicControlFd::register_message_handler(std::function<void(std::string)>&& fn) { m_control_fd->m_slot_message  = std::move(fn); }
-inline void PublicControlFd::register_closed_handler(std::function<void(int)>&& fn)          { m_control_fd->m_slot_closed   = std::move(fn); }
-inline void PublicControlFd::register_shutdown_handler(std::function<void(bool)>&& fn)       { m_control_fd->m_slot_shutdown = std::move(fn); }
+inline int  PublicControlFd::file_descriptor() const                                         { return m_control_fd->file_descriptor(); }
+// inline void PublicControlFd::register_interrupt_handler(std::function<void()>&& fn)          { m_control_fd->m_slot_interrupt = std::move(fn); }
+inline void PublicControlFd::register_message_handler(std::function<void(std::string)>&& fn) { m_control_fd->m_slot_message   = std::move(fn); }
+inline void PublicControlFd::register_closed_handler(std::function<void(int)>&& fn)          { m_control_fd->m_slot_closed    = std::move(fn); }
+inline void PublicControlFd::register_shutdown_handler(std::function<void(bool)>&& fn)       { m_control_fd->m_slot_shutdown  = std::move(fn); }
 
 inline void ControlFd::send_graceful_shutdown() { send_shutdown_message(true); }
 inline void ControlFd::send_forceful_shutdown() { send_shutdown_message(false); }
 
-} // namespace torrent::shm
+} // namespace torrent::system::ipc
 
 #endif
