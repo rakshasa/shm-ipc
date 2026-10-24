@@ -61,8 +61,8 @@ RouterFactory::initialize(uint32_t segment_size) {
   m_segment_1->create(segment_size);
   m_segment_2->create(segment_size);
 
-  static_cast<torrent::system::ipc::Channel*>(m_segment_1->address())->initialize(m_segment_1->address(), m_segment_1->size());
-  static_cast<torrent::system::ipc::Channel*>(m_segment_2->address())->initialize(m_segment_2->address(), m_segment_2->size());
+  static_cast<torrent::system::ipc::Channel*>(m_segment_1->address())->initialize(m_segment_1->size());
+  static_cast<torrent::system::ipc::Channel*>(m_segment_2->address())->initialize(m_segment_2->size());
 
   m_control_fds   = create_socket_pair();
   m_keepalive_fds = create_socket_pair();

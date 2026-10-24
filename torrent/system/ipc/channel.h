@@ -24,7 +24,7 @@ public:
 
   static constexpr uint32_t flag_polling = 0x1;
 
-  void                initialize(void* addr, size_t size);
+  void                initialize(size_t size);
 
   auto&               consumer_state();
 
@@ -35,6 +35,8 @@ public:
   uint32_t            available_read();
 
   bool                can_write(uint32_t size);
+
+  // TODO: Add a write() that takes a callback to fill the data.
 
   bool                write(uint32_t id, uint32_t size, void* data);
 
@@ -51,7 +53,6 @@ private:
 
   // Constant values, offset by sizeof(Channel).
 
-  void*                 m_addr{};
   uint32_t              m_size{};
   uint32_t              m_write_threshold{};
 
@@ -61,6 +62,10 @@ private:
   std::atomic<uint32_t> m_write_offset{};
 
   std::atomic<uint32_t> m_consumer_state{};
+
+  align_cacheline
+
+  char                  m_addr[];
 };
 
 inline auto& Channel::consumer_state() { return m_consumer_state; }

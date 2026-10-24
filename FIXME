@@ -1,0 +1,33 @@
+Findings: **the IPC core is mostly real, but there are correctness bugs in `torrent/system/ipc` that are not dummy/placeholder issues.**
+
+Also: code-search results are capped (max 10), so this may be incomplete. You can view more here:  
+https://github.com/search?q=repo%3Arakshasa%2Fshm-ipc+path%3Atorrent%2Fsystem%2Fipc&type=code
+
+### High-impact correctness issues
+
+1. **Double-close risk in `close()` implementations**  
+Both `ControlFd::close()` and `WakeupFd::close()` call `remove_and_close(this)` and then unconditionally `fd_close(file_descriptor())`.  
+If `remove_and_close` already closes the fd (likely by name), this is a double-close bug (EBADF or, worse, reused-fd close race).
+
+2. **`Segment` destructor leaks mappings**  
+`Segment::~Segment()` only nulls fields; it does **not** call `destroy()`/`munmap`. If `destroy()` isn’t called manually everywhere, shared mappings leak.
+
+3. **Blocking liveness wait may spin forever**  
+`ControlFd::wait_is_alive()` loops on `recv(MSG_PEEK)` and treats `EAGAIN/EWOULDBLOCK/EINTR` as continue forever.  
+Depending on socket mode/timeouts, this can become unbounded busy-wait or dead wait instead of bounded liveness check.
+
+4. **Control framing write path needs full send/error handling audit**  
+`send_message_internal` frames `[u16 len][payload]` and loops for partial writes, which is good, but correctness depends on handling `send` return `-1` errors (EINTR/EAGAIN/timeout/peer-closed) in the unseen remainder. Worth verifying fully before relying on shutdown/fatal signaling.
+
+5. **Channel single-producer/single-consumer assumptions are strict**  
+`Router` comments indicate one producer/one consumer and id-space discipline. If callers violate this (multi-writer or uncoordinated ids), correctness fails. This is design-sensitive, not placeholder, and should be enforced/asserted where possible.
+
+### “Dummy/placeholder” check
+I did see comments/TODOs and some commented code, but the issues above are **actual runtime correctness risks**, not merely placeholders.
+
+If you want, I can next produce a **patch plan** (minimal safe fixes) or open a PR with:
+- guarded close semantics,
+- RAII `Segment` unmap in destructor,
+- bounded/timeout-aware `wait_is_alive`,
+- explicit send-loop errno policy.
+

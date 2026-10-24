@@ -40,12 +40,17 @@ Channel::verify_read_header(header_type* header) {
 }
 
 void
-Channel::initialize(void* addr, size_t size) {
+Channel::initialize(size_t size) {
+  if (reinterpret_cast<uintptr_t>(this) % LT_SMP_CACHE_BYTES != 0)
+    throw torrent::internal_error("Channel::initialize() this must be aligned to cache line size");
+
+  if (reinterpret_cast<uintptr_t>(m_addr) % LT_SMP_CACHE_BYTES != 0)
+    throw torrent::internal_error("Channel::initialize() m_addr must be aligned to cache line size");
+
   if (size == 0 || (size % LT_SMP_CACHE_BYTES) != 0)
     throw torrent::internal_error("Channel::initialize() size must be non-zero and a multiple of cache line size");
 
-  m_addr = static_cast<char*>(addr) + align_size_to_cacheline(sizeof(Channel));
-  m_size = size - align_size_to_cacheline(sizeof(Channel));
+  m_size = size - (reinterpret_cast<char*>(m_addr) - reinterpret_cast<char*>(this));
 
   // TODO: This was supposed to be a 10% buffer of the channel size to be used for closing channel
   // connections.
