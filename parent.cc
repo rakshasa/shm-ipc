@@ -46,7 +46,7 @@ ParentHandler::create_new_channel(torrent::system::ipc::Router* router) {
   NewChannelMessage msg;
   msg.id = handler->id;
 
-  if (!router->write(id, sizeof(msg), &msg))
+  if (router->write(id, sizeof(msg), &msg) != sizeof(msg))
     throw std::runtime_error("PARENT:HANDLER: failed to send new channel message");
 
   return handler;
@@ -137,7 +137,7 @@ parent_process(torrent::system::ipc::Router* router) {
 
         const char* message = "Hello from PARENT process!";
 
-        if (!router->write(id, strlen(message), (void*)message)) {
+        if (router->write(id, strlen(message), (void*)message) < 0) {
           std::cout << "PARENT: channel full, waiting..." << std::endl;
           std::this_thread::sleep_for(100ms);
 

@@ -80,7 +80,7 @@ public:
 
   // TODO: Add direct write to shm channel from at-write generated data.
 
-  bool                write(uint32_t id, uint32_t size, void* data);
+  int                 write(uint32_t id, uint32_t size, void* data);
 
   void                send_graceful_shutdown();
   void                send_forceful_shutdown();

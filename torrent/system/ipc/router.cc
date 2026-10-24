@@ -120,21 +120,24 @@ Router::close(uint32_t id) {
 
   itr->second.on_error = nullptr;
 
-  if (!m_write_channel->write(id | Router::flag_close, 0, nullptr)) {
+  if (m_write_channel->write(id | Router::flag_close, 0, nullptr) != 0) {
     // TODO: Add to a pending close queue to retry later, for now just shut down everything.
     throw torrent::internal_error("Router::close(): failed to write close event to channel");
   }
 }
 
-bool
+int
 Router::write(uint32_t id, uint32_t size, void* data) {
   assert(m_handlers.find(id) != m_handlers.end());
 
   // if (size == 0)
   //   return true;
 
-  if (!m_write_channel->write(id, size, data))
-    return false;
+  bool wake_reader = false;
+  int  result      = m_write_channel->write(id, size, data, &wake_reader);
+
+  if (result < 0)
+    return result;
 
   // TODO: This can falsely trigger, so we need to check if the last message we wrote was already
   // consumed before interrupting.
@@ -146,10 +149,10 @@ Router::write(uint32_t id, uint32_t size, void* data) {
 
   // TODO: !!! We need to keep an add a interrupt flag too, so that if the consumer knows how to do polling correctly (with zero timeout)
 
-  if (m_write_channel->consumer_state().load(std::memory_order_acquire) & Channel::flag_polling)
+  if (wake_reader && (m_write_channel->consumer_state().load(std::memory_order_acquire) & Channel::flag_polling))
     m_wakeup_fd->send_interrupt();
 
-  return true;
+  return result;
 }
 
 void
