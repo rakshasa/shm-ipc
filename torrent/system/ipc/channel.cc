@@ -68,10 +68,26 @@ Channel::available_write() {
   uint32_t end_offset   = m_write_offset.load(std::memory_order_acquire);
   uint32_t start_offset = m_read_offset.load(std::memory_order_acquire);
 
-  if (end_offset >= start_offset)
-    return std::max(m_size - end_offset, start_offset);
+  if (end_offset < start_offset)
+    return start_offset - end_offset;
 
-  return start_offset - end_offset;
+  // Non-wrapped state.
+  uint32_t tail_space = m_size - end_offset;
+  uint32_t head_space = start_offset;
+
+  // If we can split across wrap-around, both ends can be used by one write sequence.
+  if (tail_space >= split_threshold) {
+    uint32_t split_space = tail_space + head_space;
+
+    // Keep one cache line free to distinguish full/empty.
+    if (split_space <= cache_line_size)
+      return 0;
+
+    return split_space - cache_line_size;
+  }
+
+  // Otherwise only the larger contiguous side is useful (old behavior).
+  return std::max(tail_space, head_space);
 }
 
 bool
