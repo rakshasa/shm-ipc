@@ -8,6 +8,9 @@
 //
 // Querying available write space selects the largest of the contiguous free spaces, so when
 // wrapping the free space may be smaller than total free space.
+//
+// A write that doesn't fit at the end of the buffer is split into two records with the same id if
+// at least 'split_threshold' bytes remain at the end, otherwise it is written whole after the wrap.
 
 namespace torrent::system::ipc {
 
@@ -21,6 +24,9 @@ public:
 
   static constexpr size_t   header_size     = sizeof(header_type);
   static constexpr size_t   cache_line_size = LT_SMP_CACHE_BYTES;
+
+  // Minimum space left at the end of the buffer for a write to be split instead of wrapped.
+  static constexpr size_t   split_threshold = 4 * cache_line_size;
 
   static constexpr uint32_t flag_polling = 0x1;
 
