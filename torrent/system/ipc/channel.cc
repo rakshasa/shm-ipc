@@ -3,6 +3,7 @@
 #include "torrent/system/ipc/channel.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
 #include <new>
 
@@ -45,7 +46,8 @@ Channel::write_to_header(uint32_t id, uint32_t offset, uint32_t size, void* data
   header->id   = id;
   header->size = size;
 
-  std::memcpy(header->data, data, size);
+  if (size != 0)
+    std::memcpy(header->data, data, size);
 }
 
 void
@@ -68,9 +70,7 @@ Channel::initialize(size_t size) {
 
   m_size = size - (reinterpret_cast<char*>(m_addr) - reinterpret_cast<char*>(this));
 
-  // TODO: This was supposed to be a 10% buffer of the channel size to be used for closing channel
-  // connections.
-  m_write_threshold = align_size_to_cacheline(m_size / 10) + 2 * cache_line_size;
+  m_write_threshold = align_size_to_cacheline(m_size / 8);
 
   m_read_offset    = 0;
   m_write_offset   = 0;
@@ -112,88 +112,106 @@ Channel::can_write(uint32_t size) {
   return available_write() >= align_size_to_cacheline(header_size + size) + cache_line_size;
 }
 
-// TODO: When returning false, we need to also save the start_offset to indicate when we need to wake up producer.
-// TODO: To handle the cases when a spurious write happens later, clear out the wakeup_offset.
-// TODO: We set the wakeup_offset, then compare again to the start_offset, if changed we call write again.
+// Returns the number of payload bytes written, which may be less than 'size', or -1 with errno set
+// to EAGAIN if there is no room for a record (a zero-sized write only succeeds with room for its
+// header).
+//
+// If 'wake_reader' is non-null it is set to whether the reader should be woken up, i.e. if it may
+// have run out of data or at least 'write_threshold' bytes are now unread.
 
-// TODO: Reconsider above, we should never fail on write() if we check available_write() first.
-// TODO: Perhaps add a strict available_write_or_wakeup function that strictly handles this.
-
-bool
-Channel::write(uint32_t id, uint32_t size, void* data) {
+int
+Channel::write(uint32_t id, uint32_t size, void* data, bool* wake_reader) {
   if (id == 0)
     throw torrent::internal_error("Channel::write() invalid id");
-
-  if (size > m_size - header_size)
-    throw torrent::internal_error("Channel::write() size exceeds buffer size");
 
   if (data == nullptr && size != 0)
     throw torrent::internal_error("Channel::write() data is null but size is non-zero");
 
-  size_t total_size = align_size_to_cacheline(header_size + size);
+  if (wake_reader != nullptr)
+    *wake_reader = false;
 
   size_t start_offset = m_read_offset.load(std::memory_order_acquire);
-  size_t end_offset   = m_write_offset.load(std::memory_order_acquire);
+  size_t old_offset   = m_write_offset.load(std::memory_order_acquire);
+  size_t end_offset   = old_offset;
 
-  // Set when the write is split; the size of the payload written at the end of the buffer.
-  size_t first_size = size;
-  bool   split      = false;
+  size_t first_size  = 0;
+  size_t second_size = 0;
+  bool   room        = false;
+  bool   split       = false;
+  bool   pad         = false;
+
+  // Largest payload of a record that fits in 'space' bytes.
+  auto payload_in = [](size_t space) { return space >= cache_line_size ? space - header_size : 0; };
+
+  if (end_offset == m_size)
+    end_offset = 0;
 
   // We keep a cache line free to distinguish full/empty.
 
   if (end_offset < start_offset) {
     // We're in wrapped state.
-    if (start_offset - end_offset < total_size + cache_line_size)
-      return false;
+    size_t space = start_offset - end_offset;
+    space        = space > cache_line_size ? space - cache_line_size : 0;
 
-  } else if (end_offset == m_size) {
-    // At end, need to wrap.
-    if (start_offset < total_size + cache_line_size)
-      return false;
-
-    end_offset = 0;
-
-  } else if (m_size - end_offset < total_size) {
-    // Not enough space at end, need to wrap.
-    size_t remaining = m_size - end_offset;
-
-    if (remaining >= split_threshold) {
-      // Split the write in two; the first record fills the end of the buffer exactly, as
-      // 'remaining' is a multiple of the cache line size.
-      first_size = remaining - header_size;
-
-      size_t second_total = align_size_to_cacheline(header_size + (size - first_size));
-
-      if (start_offset < second_total + cache_line_size)
-        return false;
-
-      split = true;
-
-    } else {
-      // Too little left at the end, pad and write everything after the wrap.
-      if (start_offset < total_size + cache_line_size)
-        return false;
-
-      write_padding_header(end_offset);
-      end_offset = 0;
-    }
+    room       = space >= cache_line_size;
+    first_size = std::min<size_t>(size, payload_in(space));
 
   } else {
-    // Sufficient space at end.
+    size_t tail_space = m_size - end_offset;
+    size_t head_space = start_offset > cache_line_size ? start_offset - cache_line_size : 0;
+
+    // If the read offset is at the start, we cannot fill the buffer to the end.
+    size_t first_space = start_offset == 0 ? tail_space - cache_line_size : tail_space;
+
+    if (first_space >= cache_line_size && size <= payload_in(first_space)) {
+      room       = true;
+      first_size = size;
+
+    } else if (tail_space >= split_threshold) {
+      room       = first_space >= cache_line_size;
+      first_size = payload_in(first_space);
+
+      if (start_offset != 0 && head_space >= cache_line_size) {
+        // The first record fills the end of the buffer exactly, as 'tail_space' is a multiple of
+        // the cache line size.
+        second_size = std::min<size_t>(size - first_size, payload_in(head_space));
+        split       = true;
+      }
+
+    } else if (head_space >= cache_line_size) {
+      // Too little left at the end, pad and write after the wrap.
+      room       = true;
+      first_size = std::min<size_t>(size, payload_in(head_space));
+      pad        = true;
+
+    } else {
+      room       = first_space >= cache_line_size;
+      first_size = payload_in(first_space);
+    }
   }
 
-  write_to_header(id, end_offset, first_size, data);
+  if (!room) {
+    errno = EAGAIN;
+    return -1;
+  }
+
+  size_t first_offset = end_offset;
+
+  if (pad) {
+    write_padding_header(end_offset);
+    first_offset = 0;
+  }
+
+  write_to_header(id, first_offset, first_size, data);
 
   size_t new_end_offset;
 
   if (split) {
-    size_t second_size = size - first_size;
-
     write_to_header(id, 0, second_size, static_cast<char*>(data) + first_size);
     new_end_offset = align_size_to_cacheline(header_size + second_size);
 
   } else {
-    new_end_offset = end_offset + total_size;
+    new_end_offset = first_offset + align_size_to_cacheline(header_size + first_size);
   }
 
   if (new_end_offset % cache_line_size != 0)
@@ -208,7 +226,16 @@ Channel::write(uint32_t id, uint32_t size, void* data) {
   std::atomic_thread_fence(std::memory_order_release);
   m_write_offset.store(new_end_offset, std::memory_order_release);
 
-  return true;
+  if (wake_reader != nullptr) {
+    // Re-read the offset as the reader may have caught up since we started writing; if it has
+    // consumed everything before this write it may already be polling.
+    size_t read_offset = m_read_offset.load(std::memory_order_acquire);
+    size_t unread      = (new_end_offset + m_size - read_offset) % m_size;
+
+    *wake_reader = read_offset == old_offset || read_offset == first_offset || unread >= m_write_threshold;
+  }
+
+  return first_size + second_size;
 }
 
 Channel::header_type*

@@ -44,7 +44,15 @@ public:
 
   // TODO: Add a write() that takes a callback to fill the data.
 
-  bool                write(uint32_t id, uint32_t size, void* data);
+  // Like POSIX write(), returns the number of payload bytes written which may be less than 'size',
+  // or -1 with errno set to EAGAIN if there is no space.
+  //
+  // 'wake_reader' is set if the reader should be woken; when it was possibly out of data, or at
+  // least 'write_threshold' bytes are unread.
+  int                 write(uint32_t id, uint32_t size, void* data, bool* wake_reader = nullptr);
+
+  uint32_t            write_threshold() const { return m_write_threshold; }
+  void                set_write_threshold(uint32_t threshold) { m_write_threshold = threshold; }
 
   header_type*        read_header();
   void                consume_header(header_type* header);
@@ -63,6 +71,8 @@ private:
   // Constant values, offset by sizeof(Channel).
 
   uint32_t              m_size{};
+
+  // Only used by the writer.
   uint32_t              m_write_threshold{};
 
   // Mutable state:
