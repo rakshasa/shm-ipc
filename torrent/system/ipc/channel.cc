@@ -40,6 +40,22 @@ Channel::verify_read_header(header_type* header) {
 }
 
 void
+Channel::write_to_header(uint32_t id, uint32_t offset, uint32_t size, void* data) {
+  auto* header = header_at_offset(offset);
+  header->id   = id;
+  header->size = size;
+
+  std::memcpy(header->data, data, size);
+}
+
+void
+Channel::write_padding_header(uint32_t offset) {
+  auto* header = header_at_offset(offset);
+  header->id   = 0;
+  header->size = ~uint32_t{};
+}
+
+void
 Channel::initialize(size_t size) {
   if (reinterpret_cast<uintptr_t>(this) % LT_SMP_CACHE_BYTES != 0)
     throw torrent::internal_error("Channel::initialize() this must be aligned to cache line size");
@@ -69,7 +85,7 @@ Channel::available_write() {
   uint32_t start_offset = m_read_offset.load(std::memory_order_acquire);
 
   if (end_offset < start_offset)
-    return start_offset - end_offset;
+    return start_offset - end_offset - cache_line_size;
 
   // Non-wrapped state.
   uint32_t tail_space = m_size - end_offset;
@@ -79,15 +95,16 @@ Channel::available_write() {
   if (tail_space >= split_threshold) {
     uint32_t split_space = tail_space + head_space;
 
-    // Keep one cache line free to distinguish full/empty.
     if (split_space <= cache_line_size)
       return 0;
 
     return split_space - cache_line_size;
   }
 
-  // Otherwise only the larger contiguous side is useful (old behavior).
-  return std::max(tail_space, head_space);
+  if (head_space <= cache_line_size)
+    return tail_space;
+
+  return std::max(tail_space, head_space - static_cast<uint32_t>(cache_line_size));
 }
 
 bool
@@ -95,21 +112,12 @@ Channel::can_write(uint32_t size) {
   return available_write() >= align_size_to_cacheline(header_size + size) + cache_line_size;
 }
 
-// TODO: Need to align writes?
-
 // TODO: When returning false, we need to also save the start_offset to indicate when we need to wake up producer.
 // TODO: To handle the cases when a spurious write happens later, clear out the wakeup_offset.
 // TODO: We set the wakeup_offset, then compare again to the start_offset, if changed we call write again.
 
 // TODO: Reconsider above, we should never fail on write() if we check available_write() first.
 // TODO: Perhaps add a strict available_write_or_wakeup function that strictly handles this.
-
-// If the data does not fit at the end of the buffer, then:
-//
-// - If at least 'split_threshold' bytes remain at the end, the data is split into two records with
-//   the same id, the first filling the end of the buffer and the second starting at offset 0. Both
-//   become visible to the reader with a single update of the write offset.
-// - Otherwise a padding header is written at the end and the whole data is written after the wrap.
 
 bool
 Channel::write(uint32_t id, uint32_t size, void* data) {
@@ -166,10 +174,7 @@ Channel::write(uint32_t id, uint32_t size, void* data) {
       if (start_offset < total_size + cache_line_size)
         return false;
 
-      auto padding_header = header_at_offset(end_offset);
-      padding_header->size = ~uint32_t{};
-      padding_header->id   = 0;
-
+      write_padding_header(end_offset);
       end_offset = 0;
     }
 
@@ -177,23 +182,14 @@ Channel::write(uint32_t id, uint32_t size, void* data) {
     // Sufficient space at end.
   }
 
-  auto header = header_at_offset(end_offset);
-  header->size = first_size;
-  header->id   = id;
-
-  std::memcpy(header->data, data, first_size);
+  write_to_header(id, end_offset, first_size, data);
 
   size_t new_end_offset;
 
   if (split) {
     size_t second_size = size - first_size;
 
-    auto second_header = header_at_offset(0);
-    second_header->size = second_size;
-    second_header->id   = id;
-
-    std::memcpy(second_header->data, static_cast<char*>(data) + first_size, second_size);
-
+    write_to_header(id, 0, second_size, static_cast<char*>(data) + first_size);
     new_end_offset = align_size_to_cacheline(header_size + second_size);
 
   } else {

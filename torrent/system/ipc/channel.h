@@ -57,6 +57,9 @@ private:
 
   bool                  verify_read_header(header_type* header);
 
+  void                  write_to_header(uint32_t id, uint32_t offset, uint32_t size, void* data);
+  void                  write_padding_header(uint32_t offset);
+
   // Constant values, offset by sizeof(Channel).
 
   uint32_t              m_size{};
