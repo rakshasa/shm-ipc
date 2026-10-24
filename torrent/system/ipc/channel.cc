@@ -88,6 +88,13 @@ Channel::can_write(uint32_t size) {
 // TODO: Reconsider above, we should never fail on write() if we check available_write() first.
 // TODO: Perhaps add a strict available_write_or_wakeup function that strictly handles this.
 
+// If the data does not fit at the end of the buffer, then:
+//
+// - If at least 'split_threshold' bytes remain at the end, the data is split into two records with
+//   the same id, the first filling the end of the buffer and the second starting at offset 0. Both
+//   become visible to the reader with a single update of the write offset.
+// - Otherwise a padding header is written at the end and the whole data is written after the wrap.
+
 bool
 Channel::write(uint32_t id, uint32_t size, void* data) {
   if (id == 0)
@@ -101,9 +108,12 @@ Channel::write(uint32_t id, uint32_t size, void* data) {
 
   size_t total_size = align_size_to_cacheline(header_size + size);
 
-  // If we're wrapping around, add a padding header. (size == 0)
   size_t start_offset = m_read_offset.load(std::memory_order_acquire);
   size_t end_offset   = m_write_offset.load(std::memory_order_acquire);
+
+  // Set when the write is split; the size of the payload written at the end of the buffer.
+  size_t first_size = size;
+  bool   split      = false;
 
   // We keep a cache line free to distinguish full/empty.
 
@@ -121,24 +131,58 @@ Channel::write(uint32_t id, uint32_t size, void* data) {
 
   } else if (m_size - end_offset < total_size) {
     // Not enough space at end, need to wrap.
-    if (start_offset < total_size + cache_line_size)
-      return false;
+    size_t remaining = m_size - end_offset;
 
-    auto padding_header = header_at_offset(end_offset);
-    padding_header->size = ~uint32_t{};
-    padding_header->id   = 0;
+    if (remaining >= split_threshold) {
+      // Split the write in two; the first record fills the end of the buffer exactly, as
+      // 'remaining' is a multiple of the cache line size.
+      first_size = remaining - header_size;
 
-    end_offset = 0;
+      size_t second_total = align_size_to_cacheline(header_size + (size - first_size));
+
+      if (start_offset < second_total + cache_line_size)
+        return false;
+
+      split = true;
+
+    } else {
+      // Too little left at the end, pad and write everything after the wrap.
+      if (start_offset < total_size + cache_line_size)
+        return false;
+
+      auto padding_header = header_at_offset(end_offset);
+      padding_header->size = ~uint32_t{};
+      padding_header->id   = 0;
+
+      end_offset = 0;
+    }
 
   } else {
     // Sufficient space at end.
   }
 
   auto header = header_at_offset(end_offset);
-  header->size = size;
+  header->size = first_size;
   header->id   = id;
 
-  size_t new_end_offset = end_offset + total_size;
+  std::memcpy(header->data, data, first_size);
+
+  size_t new_end_offset;
+
+  if (split) {
+    size_t second_size = size - first_size;
+
+    auto second_header = header_at_offset(0);
+    second_header->size = second_size;
+    second_header->id   = id;
+
+    std::memcpy(second_header->data, static_cast<char*>(data) + first_size, second_size);
+
+    new_end_offset = align_size_to_cacheline(header_size + second_size);
+
+  } else {
+    new_end_offset = end_offset + total_size;
+  }
 
   if (new_end_offset % cache_line_size != 0)
     throw torrent::internal_error("Channel::write() new_end_offset not aligned to cache line size");
@@ -148,8 +192,6 @@ Channel::write(uint32_t id, uint32_t size, void* data) {
 
   if (new_end_offset == m_size)
     new_end_offset = 0;
-
-  std::memcpy(header->data, data, size);
 
   std::atomic_thread_fence(std::memory_order_release);
   m_write_offset.store(new_end_offset, std::memory_order_release);
