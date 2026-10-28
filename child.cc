@@ -153,7 +153,7 @@ child_process(torrent::system::ipc::Router* router) {
           const char* message = "Hello from CHILD process!";
 
           // while (!router->write(id, strlen(message) + 1, (void*)message)) {
-          if (!router->write(id, strlen(message), (void*)message)) {
+          if (router->write(id, strlen(message), (void*)message) < 0) {
             std::cout << "CHILD: channel full, waiting..." << std::endl;
             std::this_thread::sleep_for(100ms);
 
