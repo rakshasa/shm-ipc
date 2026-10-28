@@ -22,15 +22,16 @@ public:
     char        data[];
   };
 
-  static constexpr size_t   header_size     = sizeof(header_type);
-  static constexpr size_t   cache_line_size = LT_SMP_CACHE_BYTES;
+  static constexpr uint32_t header_size     = sizeof(header_type);
+  static constexpr uint32_t cache_line_size = LT_SMP_CACHE_BYTES;
 
   // Minimum space left at the end of the buffer for a write to be split instead of wrapped.
-  static constexpr size_t   split_threshold = 4 * cache_line_size;
+  static constexpr uint32_t split_threshold = 4 * cache_line_size;
 
-  static constexpr uint32_t flag_polling = 0x1;
+  static constexpr uint32_t flag_polling     = 0x1;
+  static constexpr uint32_t flag_interrupted = 0x2;
 
-  void                initialize(size_t size);
+  void                initialize(uint32_t size);
 
   auto&               consumer_state();
 
@@ -65,7 +66,7 @@ private:
 
   bool                  verify_read_header(header_type* header);
 
-  void                  write_to_header(uint32_t id, uint32_t offset, uint32_t size, void* data);
+  uint32_t              write_to_header(uint32_t id, uint32_t offset, uint32_t size, void* data);
   void                  write_padding_header(uint32_t offset);
 
   // Constant values, offset by sizeof(Channel).
