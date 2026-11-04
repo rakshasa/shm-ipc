@@ -47,7 +47,8 @@ struct RouterHandler {
 
 class LIBTORRENT_EXPORT Router {
 public:
-  using data_func = std::function<void(void* data, uint32_t size)>;
+  using data_func        = std::function<void(void* data, uint32_t size)>;
+  using async_write_func = std::function<int(Channel*)>;
 
   constexpr static uint32_t flag_close = 0x80000000;
   constexpr static uint32_t flag_mask  = 0xF0000000;
@@ -60,7 +61,6 @@ public:
     std::unique_ptr<Segment> read_segment;
     std::unique_ptr<Segment> write_segment;
   };
-
 
   Router(create_args args);
   ~Router();
@@ -81,6 +81,7 @@ public:
   // TODO: Add direct write to shm channel from at-write generated data.
 
   int                 write(uint32_t id, uint32_t size, void* data);
+  void                write_async(async_write_func write_fn);
 
   void                send_graceful_shutdown();
   void                send_forceful_shutdown();
@@ -96,6 +97,7 @@ private:
   Router& operator=(const Router&) = delete;
 
   void                process_reads();
+  void                process_async_writes();
 
   using handler_map = std::map<uint32_t, RouterHandler>;
 
@@ -103,6 +105,8 @@ private:
   // check the channel. This avoids unnessesary writes of wakeup messages.
 
   // TODO: Add event_fd/kevent and do control_fd in a separate thread to avoid child deadlocks.
+
+  // TODO: Allow for using std::async threads to do read/write processing, use std::atomic::wait().
 
   std::unique_ptr<ControlFd> m_control_fd;
   std::unique_ptr<WakeupFd>  m_wakeup_fd{};
@@ -116,6 +120,8 @@ private:
 
   uint32_t            m_next_id{1};
   handler_map         m_handlers;
+
+  std::vector<async_write_func> m_async_writes;
 };
 
 inline int  Router::keepalive_fd() const                     { return m_keepalive_fd; }

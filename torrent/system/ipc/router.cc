@@ -63,7 +63,13 @@ uint32_t
 Router::register_handler(data_func on_read, data_func on_error) {
   auto id = m_next_id;
 
-  while (!try_register_handler(id, on_read, on_error)) {
+  while (true) {
+    if ((m_next_id & flag_mask) != 0)
+      id = 1;
+
+    if (try_register_handler(id, on_read, on_error))
+      break;
+
     id++;
 
     if (id == 0)
@@ -120,7 +126,9 @@ Router::close(uint32_t id) {
 
   itr->second.on_error = nullptr;
 
-  if (m_write_channel->write(id | Router::flag_close, 0, nullptr) != 0) {
+  static const char* close_msg = "CLOSE";
+
+  if (m_write_channel->write(id | Router::flag_close, 6, (void*)close_msg) != 6) {
     // TODO: Add to a pending close queue to retry later, for now just shut down everything.
     throw torrent::internal_error("Router::close(): failed to write close event to channel");
   }
@@ -130,38 +138,38 @@ int
 Router::write(uint32_t id, uint32_t size, void* data) {
   assert(m_handlers.find(id) != m_handlers.end());
 
-  // if (size == 0)
-  //   return true;
-
-  bool wake_reader = false;
-  int  result      = m_write_channel->write(id, size, data, &wake_reader);
+  int result = m_write_channel->write(id, size, data);
 
   if (result < 0)
     return result;
 
-  // TODO: This can falsely trigger, so we need to check if the last message we wrote was already
-  // consumed before interrupting.
-  //
-  // TODO: We would have to have a counter_id that both sides increment?
-
-
-  // TODO: !!! Verify flag_polling gets set before we re-check the channel.
-
-  // TODO: !!! We need to keep an add a interrupt flag too, so that if the consumer knows how to do polling correctly (with zero timeout)
-
-
   // This doesn't check if we're already interrupted.
 
-  // TODO: Move to Channel.
-  uint32_t expected = Channel::flag_polling;
-
-  bool should_interrupt = m_write_channel->consumer_state().compare_exchange_strong(expected, Channel::flag_polling | Channel::flag_interrupted,
-                                                                                    std::memory_order_acq_rel, std::memory_order_acquire);
-
-  if (should_interrupt)
+  if (m_write_channel->should_wake_consumer())
     m_wakeup_fd->send_interrupt();
 
   return result;
+}
+
+// The write_fn should return 0 if it has no more data to write, or -1 with errno set to EAGAIN if
+// nothing was written.
+//
+// It must return the number of bytes written if it wrote any data to indicate it should be called
+// again.
+void
+Router::write_async(async_write_func write_fn) {
+  int result = write_fn(m_write_channel);
+
+  if (result == -1 && errno != EAGAIN)
+    throw torrent::internal_error("Router::write_async(): write_fn failed with error: " + std::string(strerror(errno)));
+
+  if (result == 0)
+    return;
+
+  m_async_writes.push_back(std::move(write_fn));
+
+  if (result > 0 && m_write_channel->should_wake_consumer())
+    m_wakeup_fd->send_interrupt();
 }
 
 void
@@ -200,15 +208,21 @@ Router::send_fatal_error(const char* msg, uint32_t size) {
 void
 Router::process_reads_pre_polling() {
   process_reads();
+  process_async_writes();
   m_read_channel->consumer_state().store(Channel::flag_polling, std::memory_order_release);
+  m_write_channel->producer_state().store(Channel::flag_polling, std::memory_order_release);
   process_reads();
+  process_async_writes();
 }
 
 void
 Router::process_reads_post_polling() {
   process_reads();
+  process_async_writes();
   m_read_channel->consumer_state().store(0, std::memory_order_release);
+  m_write_channel->producer_state().store(0, std::memory_order_release);
   process_reads();
+  process_async_writes();
 }
 
 void
@@ -258,6 +272,9 @@ Router::process_reads() {
     }
 
     m_read_channel->consume_header(header);
+
+    if (m_read_channel->should_wake_producer())
+      m_wakeup_fd->send_interrupt();
   }
 
   // TODO: Replace zero-length close messages with a id=0 special message that is buffered and
@@ -267,6 +284,45 @@ Router::process_reads() {
   //
   // The process_reads() function can then send these special messages after reading normal
   // messages, and do reads while the buffer is insufficient to send them.
+}
+
+// TODO: This should restart from where it hit EAGAIN.
+
+void
+Router::process_async_writes() {
+  if (m_async_writes.empty())
+    return;
+
+  auto head_itr    = m_async_writes.begin();
+  auto current_itr = m_async_writes.begin();
+
+  while (true) {
+    int result = (*current_itr)(m_write_channel);
+
+    head_itr++;
+
+    if (result != 0)
+      current_itr++;
+
+    if (result == -1) {
+      if (errno != EAGAIN)
+        throw torrent::internal_error("Router::process_async_writes(): write_fn failed with error: " + std::string(strerror(errno)));
+
+      break;
+    }
+
+    if (head_itr == m_async_writes.end())
+      break;
+
+    if (current_itr != head_itr)
+      *current_itr = std::move(*head_itr);
+  }
+
+  if (current_itr != head_itr)
+    m_async_writes.erase(current_itr, head_itr);
+
+  if (m_write_channel->should_wake_consumer())
+    m_wakeup_fd->send_interrupt();
 }
 
 } // namespace torrent::system::ipc

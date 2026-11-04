@@ -56,7 +56,7 @@ ChildHandler::on_read(void* data, uint32_t size) {
 // Child process:
 //
 
-constexpr auto message_interval = 5s;
+constexpr auto message_interval = 2s;
 
 void
 child_process(torrent::system::ipc::Router* router) {
@@ -150,19 +150,59 @@ child_process(torrent::system::ipc::Router* router) {
         } else {
           uint32_t id = child_handler->channels[i % child_handler->channels.size()]->id;
 
-          const char* message = "Hello from CHILD process!";
+          // const char* message = "Hello from CHILD process!";
+
+          // Create 10000 byte message with not just x
+
+          std::string message = "Hello from CHILD process! message #" + std::to_string(i) + " " + //std::string(10000, 'x');
+            std::string(1000, 'a') + std::string(1000, 'b') + std::string(1000, 'c') + std::string(1000, 'd') + std::string(1000, 'e') +
+            std::string(1000, 'f') + std::string(1000, 'g') + std::string(1000, 'h') + std::string(1000, 'i') + std::string(1000, 'j');
 
           // while (!router->write(id, strlen(message) + 1, (void*)message)) {
-          if (router->write(id, strlen(message), (void*)message) < 0) {
-            std::cout << "CHILD: channel full, waiting..." << std::endl;
-            std::this_thread::sleep_for(100ms);
+          // if (router->write(id, strlen(message), (void*)message) < 0) {
+          //   std::cout << "CHILD: channel full, waiting..." << std::endl;
+          //   std::this_thread::sleep_for(100ms);
 
-            i--;
+          //   i--;
 
-            /////////////
-          } else {
-            last_write = std::chrono::steady_clock::now();
-          }
+          //   /////////////
+          // } else {
+          //   last_write = std::chrono::steady_clock::now();
+          // }
+
+          router->write_async([id, message = std::move(message), pos=size_t{}](auto* channel) mutable {
+              std::cout << "CHILD: writing message to channel id:" << id << " size:" << message.size() << " pos:" << pos << std::endl;
+
+              if (pos >= message.size())
+                return 0;
+
+              errno = 0;
+
+              auto remaining = message.size() - pos;
+              auto written   = channel->write(id, remaining, (void*)(message.data() + pos));
+
+              if (written == -1) {
+                if (errno == EAGAIN) {
+                  std::cout << "CHILD: channel full, waiting..." << std::endl;
+                  return -1;
+                } else {
+                  std::cout << "CHILD: write error: " << strerror(errno) << std::endl;
+                  return -1;
+                }
+              }
+
+              pos += written;
+
+              if (pos >= message.size()) {
+                std::cout << "CHILD: wrote message to channel id:" << id << " size:" << message.size() << std::endl;
+                return 0;
+              }
+
+              std::cout << "CHILD: wrote " << written << " bytes to channel id:" << id << ", remaining: " << (message.size() - pos) << std::endl;
+              return written;
+            });
+
+          last_write = std::chrono::steady_clock::now();
         }
       }
 

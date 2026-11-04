@@ -32,7 +32,9 @@ Channel::header_at_offset(uint32_t offset) {
 
 bool
 Channel::verify_read_header(header_type* header) {
-  if (header != header_at_offset(m_read_offset.load(std::memory_order_acquire)))
+  auto start_offset = m_read_offset.load(std::memory_order_acquire);
+
+  if (header != header_at_offset(start_offset) && header != header_at_offset(0))
     return false;
 
   if (header->size > m_size - (as_c_ptr(header) - as_c_ptr(header_at_offset(0))) - header_size)
@@ -47,7 +49,9 @@ Channel::write_to_header(uint32_t id, uint32_t offset, uint32_t size, void* data
   header->id   = id;
   header->size = size;
 
-  std::memcpy(header->data, data, size);
+  if (size > 0)
+    std::memcpy(header->data, data, size);
+
   return align_size_to_cacheline(offset + header_size + size);
 }
 
@@ -78,61 +82,22 @@ Channel::initialize(uint32_t size) {
   m_consumer_state = 0;
 }
 
-// TODO: Make this return both sides of the wrap, so we can do 2x writes?
-
-uint32_t
-Channel::available_write() {
-  uint32_t end_offset   = m_write_offset.load(std::memory_order_acquire);
-  uint32_t start_offset = m_read_offset.load(std::memory_order_acquire);
-
-  if (end_offset < start_offset)
-    return start_offset - end_offset - cache_line_size;
-
-  // Non-wrapped state.
-  uint32_t tail_space = m_size - end_offset;
-  uint32_t head_space = start_offset;
-
-  // If we can split across wrap-around, both ends can be used by one write sequence.
-  if (tail_space >= split_threshold) {
-    uint32_t split_space = tail_space + head_space;
-
-    if (split_space <= cache_line_size)
-      return 0;
-
-    return split_space - cache_line_size;
-  }
-
-  if (head_space <= cache_line_size)
-    return tail_space;
-
-  return std::max(tail_space, head_space - static_cast<uint32_t>(cache_line_size));
-}
-
-bool
-Channel::can_write(uint32_t size) {
-  return available_write() >= align_size_to_cacheline(header_size + size) + cache_line_size;
-}
-
-// Returns the number of payload bytes written, which may be less than 'size', or -1 with errno set
-// to EAGAIN if there is no room for a record (a zero-sized write only succeeds with room for its
-// header).
+// Returns the number of payload bytes written, which may be less than 'size'.
 //
-// If 'wake_reader' is non-null it is set to whether the reader should be woken up, i.e. if it may
-// have run out of data or at least 'write_threshold' bytes are now unread.
-
+// Or -1 with errno set to EAGAIN if there is no room to write the data.
 int
-Channel::write(uint32_t id, uint32_t size, void* data, bool* wake_reader) {
+Channel::write(uint32_t id, uint32_t size, void* data) {
   if (id == 0)
     throw torrent::internal_error("Channel::write() invalid id");
 
-  if (data == nullptr)
-    throw torrent::internal_error("Channel::write() data is null");
+  // if (data == nullptr)
+  //   throw torrent::internal_error("Channel::write() data is null");
 
-  if (size == 0)
-    throw torrent::internal_error("Channel::write() size is zero");
+  // if (size == 0)
+  //   throw torrent::internal_error("Channel::write() size is zero");
 
-  if (wake_reader != nullptr)
-    *wake_reader = false;
+  if (size == 0 && data != nullptr)
+    throw torrent::internal_error("Channel::write() size is zero but data is not null");
 
   uint32_t start_offset = m_read_offset.load(std::memory_order_acquire);
   uint32_t old_offset   = m_write_offset.load(std::memory_order_acquire);
@@ -223,15 +188,6 @@ Channel::write(uint32_t id, uint32_t size, void* data, bool* wake_reader) {
   std::atomic_thread_fence(std::memory_order_release);
   m_write_offset.store(end_offset, std::memory_order_release);
 
-  // if (wake_reader != nullptr) {
-  //   // Re-read the offset as the reader may have caught up since we started writing; if it has
-  //   // consumed everything before this write it may already be polling.
-  //   size_t read_offset = m_read_offset.load(std::memory_order_acquire);
-  //   size_t unread      = (new_end_offset + m_size - read_offset) % m_size;
-
-  //   *wake_reader = read_offset == old_offset || read_offset == first_offset || unread >= m_write_threshold;
-  // }
-
   return first_size + second_size;
 }
 
@@ -243,30 +199,20 @@ Channel::read_header() {
   if (start_offset == end_offset)
     return nullptr;
 
+  if (start_offset == m_size) {
+    if (end_offset == 0)
+      return nullptr;
+
+    start_offset = 0;
+  }
+
   std::atomic_thread_fence(std::memory_order_acquire);
 
   auto header = header_at_offset(start_offset);
 
-  if (header->size == ~uint32_t{0}) {
-    // Padding header, wrap around.
-    if (start_offset < end_offset)
-      throw torrent::internal_error("Channel::read_header() padding header but no wrap");
-
-    start_offset = 0;
-    header       = header_at_offset(start_offset);
-
-    if (start_offset == end_offset)
-      throw torrent::internal_error("Channel::read_header() padding header but no data after wrap");
-
-    if (header->size == ~uint32_t{0})
-      throw torrent::internal_error("Channel::read_header() consecutive padding headers");
-
-    // Free up the padding header for the next write and ensure verify_read_header() works correctly.
-    m_read_offset.store(start_offset, std::memory_order_release);
-  }
-
   if (!verify_read_header(header))
-    throw torrent::internal_error("Channel::read_header() header size exceeds buffer size");
+    throw torrent::internal_error("Channel::read_header() header size exceeds buffer size : " +
+                                  std::to_string(header->size) + " : " + std::to_string(start_offset));
 
   return header;
 }
@@ -281,9 +227,6 @@ Channel::consume_header(header_type* header) {
 
   if (new_start_offset > m_size)
     throw torrent::internal_error("Channel::consume_header() new_start_offset exceeds buffer size");
-
-  if (new_start_offset == m_size)
-    new_start_offset = 0;
 
   m_read_offset.store(new_start_offset, std::memory_order_release);
 }

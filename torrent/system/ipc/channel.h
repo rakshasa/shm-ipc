@@ -34,14 +34,11 @@ public:
   void                initialize(uint32_t size);
 
   auto&               consumer_state();
+  auto&               producer_state();
 
-  // There will always be at least one (unusable) cache line free, and headers are not included.
-  //
-  // Only use this for a rough estimate of available space.
-  uint32_t            available_write();
-  uint32_t            available_read();
-
-  bool                can_write(uint32_t size);
+  // Check if the producer or consumer is polling and not already interrupted.
+  bool                should_wake_consumer();
+  bool                should_wake_producer();
 
   // TODO: Add a write() that takes a callback to fill the data.
 
@@ -50,7 +47,7 @@ public:
   //
   // 'wake_reader' is set if the reader should be woken; when it was possibly out of data, or at
   // least 'write_threshold' bytes are unread.
-  int                 write(uint32_t id, uint32_t size, void* data, bool* wake_reader = nullptr);
+  int                 write(uint32_t id, uint32_t size, void* data);
 
   uint32_t            write_threshold() const { return m_write_threshold; }
   void                set_write_threshold(uint32_t threshold) { m_write_threshold = threshold; }
@@ -82,6 +79,7 @@ private:
   std::atomic<uint32_t> m_write_offset{};
 
   std::atomic<uint32_t> m_consumer_state{};
+  std::atomic<uint32_t> m_producer_state{};
 
   align_cacheline
 
@@ -89,6 +87,19 @@ private:
 };
 
 inline auto& Channel::consumer_state() { return m_consumer_state; }
+inline auto& Channel::producer_state() { return m_producer_state; }
+
+inline bool
+Channel::should_wake_consumer() {
+  uint32_t expected = flag_polling;
+  return m_consumer_state.compare_exchange_strong(expected, expected | flag_interrupted, std::memory_order_acq_rel, std::memory_order_acquire);
+}
+
+inline bool
+Channel::should_wake_producer() {
+  uint32_t expected = flag_polling;
+  return m_producer_state.compare_exchange_strong(expected, expected | flag_interrupted, std::memory_order_acq_rel, std::memory_order_acquire);
+}
 
 } // namespace torrent::system::ipc
 

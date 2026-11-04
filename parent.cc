@@ -19,12 +19,12 @@ struct ParentHandler {
 
     std::cout << "PARENT:HANDLER: received message: id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
 
-    throw std::runtime_error("PARENT:HANDLER: throwing error as test");
+    // throw std::runtime_error("PARENT:HANDLER: throwing error as test");
   }
 
   void on_error(void* data, uint32_t size) {
     std::cout << "PARENT:HANDLER: received error:   id:" << id << " size:" << size << " : " << std::string(static_cast<char*>(data), size) << std::endl;
-    throw std::runtime_error("PARENT:HANDLER: throwing error as test");
+    // throw std::runtime_error("PARENT:HANDLER: throwing error as test");
   }
 
   TestHandler* create_new_channel(torrent::system::ipc::Router* router);
